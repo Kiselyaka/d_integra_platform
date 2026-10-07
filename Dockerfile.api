@@ -4,7 +4,6 @@ COPY backend/pyproject.toml ./
 COPY backend/src ./src
 COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout 300 --retries 5 .
 ENV PYTHONPATH=/app/src
 CMD ["sh", "-c", "alembic upgrade head && uvicorn integration_api.main:app --host 0.0.0.0 --port 8000"]
-

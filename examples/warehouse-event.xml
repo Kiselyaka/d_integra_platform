@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<WarehouseEvent>
+    <EventId>70f4b9af-0d97-4bc1-9db9-916f184a83b4</EventId>
+    <EventType>reservation.succeeded</EventType>
+    <OccurredAt>2026-10-07T18:00:00+03:00</OccurredAt>
+    <CorrelationId>order-451</CorrelationId>
+    <SchemaVersion>1</SchemaVersion>
+    <Payload>
+        <ReservationSucceeded>
+            <OrderNumber>451</OrderNumber>
+            <Status>SUCCEEDED</Status>
+        </ReservationSucceeded>
+    </Payload>
+</WarehouseEvent>

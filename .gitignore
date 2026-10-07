@@ -1,12 +1,6 @@
-.env
-.venv/
-.pip-temp/
-.pip-build-tracker/
+Dockerfile.api.local
+*.log
+backend/.venv/
 __pycache__/
-.pytest_cache/
-.pytest-tmp-*/
-pytest-cache-files-*/
 *.py[cod]
 *.egg-info/
-node_modules/
-dist/
