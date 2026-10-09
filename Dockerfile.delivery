@@ -4,6 +4,7 @@ COPY backend/pyproject.toml ./
 COPY backend/src ./src
 COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout 300 --retries 5 "setuptools>=69" \
+    && pip install --no-cache-dir --timeout 300 --retries 5 --no-build-isolation .
 ENV PYTHONPATH=/app/src
 CMD ["uvicorn", "delivery_service.main:app", "--host", "0.0.0.0", "--port", "8001"]

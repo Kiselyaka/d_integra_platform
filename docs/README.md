@@ -10,6 +10,7 @@ Milestone documentation:
 - [Milestone 2 — fan-out `order.created` в CRM и Warehouse 1С](milestones/milestone-2.md)
 - [Milestone 3 — полный бизнес-цикл через Warehouse callback](milestones/milestone-3.md)
 - [Milestone 4 — Delivery, retry и stale recovery](milestones/milestone-4.md)
+- [Milestone 5 — Kafka, transactional Outbox и Inbox](milestones/milestone-5.md)
 
 Published contracts:
 

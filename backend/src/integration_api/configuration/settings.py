@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+pysqlite:///:memory:"
     kafka_bootstrap_servers: str = "kafka:9092"
+    kafka_outbox_poll_interval_seconds: float = 1.0
     crm_base_url: str = "http://crm:8000"
     crm_delivery_timeout_seconds: float = 5.0
     warehouse_base_url: str = "http://host.docker.internal:8081/WarehouseDemo_Base"

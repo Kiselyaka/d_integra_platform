@@ -3,16 +3,18 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from delivery_service.delivery.application import DeliveryProcessor, DeliveryRequestService, RetryPolicySnapshot
-from delivery_service.delivery.models import Delivery, DeliveryBase, DeliveryFailure
+from delivery_service.delivery.application import DeliveryProcessor, RetryPolicySnapshot
+from delivery_service.delivery.models import Delivery, DeliveryBase, DeliveryFailure, DeliveryOutboxEvent
+from delivery_service.delivery.requested_consumer import DeliveryRequestedConsumer
 from delivery_service.delivery.ports import DeliveryExecution
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.delivery_completion import MessageDeliveryCompletionService
-from integration_api.message_processing.models import Base, Message, RouteProcessingResult
+from integration_api.message_processing.completion_consumer import MessageCompletionConsumer
+from integration_api.message_processing.models import Base, Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.processing import EventProcessingService
 from integration_api.message_processing.routing import StaticRouteProvider
 from integration_api.message_processing.transformation import RouteTransformationProvider
 from shared.database import create_database_engine, create_session_factory
+from shared.messaging.contracts import DeliveryCompletedPayload, DeliveryRequestedPayload, InternalEventEnvelope
 
 
 def _event() -> ExternalEventEnvelope:
@@ -74,14 +76,17 @@ def test_fanout_keeps_delivery_lifecycles_independent(
         ))
         session.commit()
 
-    requests = DeliveryRequestService(
-        session_factory, RetryPolicySnapshot(3, "exponential", 5, 300, 2, "REMOTE_SERVER_ERROR")
-    )
     EventProcessingService(
         session_factory,
         StaticRouteProvider("http://crm:8000", "http://host.docker.internal:8081/WarehouseDemo_Base"),
-        RouteTransformationProvider(), requests,
+        RouteTransformationProvider(), RetryPolicySnapshot(3, "exponential", 5, 300, 2, "REMOTE_SERVER_ERROR"),
     ).process("message-001")
+    consumer = DeliveryRequestedConsumer(session_factory)
+    with session_factory() as session:
+        events = list(session.scalars(select(ProcessingOutboxEvent)))
+    for item in events:
+        envelope = InternalEventEnvelope.model_validate(item.envelope)
+        consumer.handle(envelope, DeliveryRequestedPayload.model_validate(envelope.payload))
     with session_factory() as session:
         pending_message = session.get(Message, "message-001")
         pending_deliveries = list(session.scalars(select(Delivery)))
@@ -89,9 +94,15 @@ def test_fanout_keeps_delivery_lifecycles_independent(
     assert {delivery.status for delivery in pending_deliveries} == {"QUEUED"}
 
     executor = ConfigurableExecutor(failing_targets)
-    DeliveryProcessor(session_factory, executor, MessageDeliveryCompletionService(session_factory), 60).process_available(
+    DeliveryProcessor(session_factory, executor, None, 60).process_available(
         datetime(2026, 10, 9, tzinfo=UTC)
     )
+    completion = MessageCompletionConsumer(session_factory)
+    with session_factory() as session:
+        events = list(session.scalars(select(DeliveryOutboxEvent).where(DeliveryOutboxEvent.event_type == "delivery.completed")))
+    for item in events:
+        envelope = InternalEventEnvelope.model_validate(item.envelope)
+        completion.handle(envelope, DeliveryCompletedPayload.model_validate(envelope.payload))
 
     assert set(executor.calls) == {"crm", "warehouse"}
     with session_factory() as session:

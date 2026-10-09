@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -13,9 +14,11 @@ from delivery_service.delivery.models import (
     DeliveryAttempt,
     DeliveryAttemptOutcome,
     DeliveryFailure,
+    DeliveryOutboxEvent,
     DeliveryStatus,
 )
 from delivery_service.delivery.ports import DeliveryExecution, DeliveryExecutorPort, MessageCompletionPort
+from shared.messaging.contracts import InternalEventEnvelope, envelope_json, utc_now
 
 
 @dataclass(frozen=True)
@@ -42,7 +45,12 @@ class DeliveryRequest:
 
 
 class DeliveryRequestService:
-    """Local M4 boundary used by Message Processing to request a Delivery."""
+    """M4 compatibility fixture for isolated Delivery aggregate tests.
+
+    Production M5 code never invokes this service: requested Deliveries are
+    created exclusively by ``DeliveryRequestedConsumer`` after Kafka Inbox
+    deduplication.
+    """
 
     def __init__(self, session_factory: sessionmaker[Session], retry_policy: RetryPolicySnapshot) -> None:
         self._session_factory = session_factory
@@ -95,11 +103,13 @@ class DeliveryProcessor:
         self,
         session_factory: sessionmaker[Session],
         executor: DeliveryExecutorPort,
-        completion: MessageCompletionPort,
+        completion: MessageCompletionPort | None,
         stale_processing_timeout_seconds: int,
     ) -> None:
         self._session_factory = session_factory
         self._executor = executor
+        # Only M4 tests may inject this compatibility seam. M5 production
+        # completion is emitted through Delivery Outbox and Kafka.
         self._completion = completion
         self._stale_processing_timeout = timedelta(seconds=stale_processing_timeout_seconds)
 
@@ -147,14 +157,16 @@ class DeliveryProcessor:
                     delivery.schedule_retry(now)
                 else:
                     delivery.dead_letter(now, "retry_limit_exhausted_after_stale_processing")
+                    self._append_terminal_outbox(session, delivery, now)
                 recovered_message_ids.append(delivery.message_id)
             try:
                 session.commit()
             except StaleDataError:
                 session.rollback()
                 return 0
-        for message_id in recovered_message_ids:
-            self._completion.refresh(message_id)
+        if self._completion is not None:
+            for message_id in recovered_message_ids:
+                self._completion.refresh(message_id)
         return len(recovered_message_ids)
 
     def _claim_next(self, now: datetime) -> str | None:
@@ -199,7 +211,8 @@ class DeliveryProcessor:
             else:
                 self._finish_success(session, delivery, execution, now)
             message_id = delivery.message_id
-        self._completion.refresh(message_id)
+        if self._completion is not None:
+            self._completion.refresh(message_id)
 
     @staticmethod
     def _active_attempt(session: Session, delivery: Delivery) -> DeliveryAttempt:
@@ -216,6 +229,7 @@ class DeliveryProcessor:
     def _finish_success(self, session: Session, delivery: Delivery, execution: DeliveryExecution, now: datetime) -> None:
         self._active_attempt(session, delivery).mark_succeeded(now, execution.http_status)
         delivery.mark_delivered(now)
+        self._append_terminal_outbox(session, delivery, now)
         session.commit()
 
     def _finish_failure(self, session: Session, delivery: Delivery, failure: DeliveryFailure, now: datetime) -> None:
@@ -226,7 +240,79 @@ class DeliveryProcessor:
         else:
             reason = "retry_limit_exhausted" if failure.retryable else "non_retryable_transport_error"
             delivery.dead_letter(now, reason)
+            self._append_terminal_outbox(session, delivery, now)
         session.commit()
+
+    @staticmethod
+    def _append_terminal_outbox(session: Session, delivery: Delivery, now: datetime) -> None:
+        """Persist terminal Delivery state and its Kafka events atomically."""
+
+        status = DeliveryStatus(delivery.status)
+        if status not in {DeliveryStatus.DELIVERED, DeliveryStatus.DEAD_LETTER}:
+            return
+        existing = session.scalar(
+            select(DeliveryOutboxEvent).where(
+                DeliveryOutboxEvent.delivery_id == delivery.id,
+                DeliveryOutboxEvent.event_type == "delivery.completed",
+            )
+        )
+        if existing is not None:
+            return
+        completed_at = delivery.completed_at or now
+        completed = InternalEventEnvelope(
+            event_id=str(uuid4()),
+            event_type="delivery.completed",
+            aggregate_id=delivery.id,
+            occurred_at=completed_at,
+            correlation_id=delivery.correlation_id,
+            payload={
+                "delivery_id": delivery.id,
+                "message_id": delivery.message_id,
+                "route_processing_result_id": delivery.route_processing_result_id,
+                "target_system": delivery.target_system,
+                "status": status.value,
+                "attempt_count": delivery.attempt_count,
+                "completed_at": completed_at.isoformat(),
+            },
+        )
+        session.add(
+            DeliveryOutboxEvent(
+                id=str(uuid4()), event_id=completed.event_id, event_type=completed.event_type,
+                aggregate_id=completed.aggregate_id, delivery_id=delivery.id,
+                topic="integration.delivery.completed", message_key=delivery.id,
+                envelope=envelope_json(completed), publish_attempt_count=0,
+            )
+        )
+        if status is not DeliveryStatus.DEAD_LETTER:
+            return
+        dead_letter = InternalEventEnvelope(
+            event_id=str(uuid4()),
+            event_type="delivery.dead_lettered",
+            aggregate_id=delivery.id,
+            occurred_at=completed_at,
+            correlation_id=delivery.correlation_id,
+            payload={
+                "delivery_id": delivery.id,
+                "message_id": delivery.message_id,
+                "route_processing_result_id": delivery.route_processing_result_id,
+                "target_system": delivery.target_system,
+                "reason": delivery.dead_letter_reason or "unspecified",
+                "attempt_count": delivery.attempt_count,
+                "last_error": {
+                    "category": delivery.last_error_category,
+                    "code": delivery.last_error_code,
+                    "message": delivery.last_error_message,
+                },
+            },
+        )
+        session.add(
+            DeliveryOutboxEvent(
+                id=str(uuid4()), event_id=dead_letter.event_id, event_type=dead_letter.event_type,
+                aggregate_id=dead_letter.aggregate_id, delivery_id=delivery.id,
+                topic="integration.delivery.dead_lettered", message_key=delivery.id,
+                envelope=envelope_json(dead_letter), publish_attempt_count=0,
+            )
+        )
 
 
 def _failure_from_exception(error: Exception) -> DeliveryFailure:

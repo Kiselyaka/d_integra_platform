@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import JSON
 
 
 class DeliveryBase(DeclarativeBase):
@@ -94,6 +96,7 @@ class Delivery(DeliveryBase):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lock_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     idempotency_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __mapper_args__ = {"version_id_col": lock_version, "version_id_generator": False}
 
@@ -101,6 +104,8 @@ class Delivery(DeliveryBase):
     def create(
         cls,
         *,
+        delivery_id: str | None = None,
+        correlation_id: str | None = None,
         message_id: str,
         route_processing_result_id: str,
         route_key: str,
@@ -117,7 +122,7 @@ class Delivery(DeliveryBase):
         retry_multiplier: int,
         retryable_errors: str,
     ) -> "Delivery":
-        delivery_id = str(uuid4())
+        delivery_id = delivery_id or str(uuid4())
         return cls(
             id=delivery_id,
             message_id=message_id,
@@ -139,6 +144,7 @@ class Delivery(DeliveryBase):
             retryable_errors=retryable_errors,
             lock_version=1,
             idempotency_key=delivery_id,
+            correlation_id=correlation_id,
         )
 
     @property
@@ -269,3 +275,41 @@ class DeliveryAttempt(DeliveryBase):
         self.error_category = "STALE_PROCESSING"
         self.error_code = "STALE_PROCESSING"
         self.error_message = message
+
+
+class DeliveryOutboxEvent(DeliveryBase):
+    """Delivery-owned terminal event waiting for Kafka acknowledgement."""
+
+    __tablename__ = "delivery_outbox_events"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_delivery_outbox_events_event_id"),
+        UniqueConstraint("delivery_id", "event_type", name="uq_delivery_outbox_delivery_event_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    delivery_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    topic: Mapped[str] = mapped_column(String(255), nullable=False)
+    message_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    envelope: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publish_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_publish_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    publish_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DeliveryInboxMessage(DeliveryBase):
+    __tablename__ = "delivery_inbox_messages"
+    __table_args__ = (UniqueConstraint("consumer_name", "event_id", name="uq_delivery_inbox_consumer_event"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    consumer_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

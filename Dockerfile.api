@@ -4,6 +4,10 @@ COPY backend/pyproject.toml ./
 COPY backend/src ./src
 COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
-RUN pip install --no-cache-dir --timeout 300 --retries 5 .
+# Build isolation creates a second pip process with its own short default
+# timeout. Install the build backend explicitly so the retry/timeout policy is
+# also used when the network is slow.
+RUN pip install --no-cache-dir --timeout 300 --retries 5 "setuptools>=69" \
+    && pip install --no-cache-dir --timeout 300 --retries 5 --no-build-isolation .
 ENV PYTHONPATH=/app/src
 CMD ["sh", "-c", "alembic upgrade head && uvicorn integration_api.main:app --host 0.0.0.0 --port 8000"]

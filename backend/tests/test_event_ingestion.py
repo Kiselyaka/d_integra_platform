@@ -1,17 +1,19 @@
 from sqlalchemy import func, select
 
-from delivery_service.delivery.application import DeliveryProcessor, DeliveryRequestService, RetryPolicySnapshot
-from delivery_service.delivery.models import DeliveryBase, DeliveryFailure
+from delivery_service.delivery.application import DeliveryProcessor, RetryPolicySnapshot
+from delivery_service.delivery.models import DeliveryBase, DeliveryFailure, DeliveryOutboxEvent
+from delivery_service.delivery.requested_consumer import DeliveryRequestedConsumer
 from delivery_service.delivery.ports import DeliveryExecution
+from integration_api.message_processing.completion_consumer import MessageCompletionConsumer
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.delivery_completion import MessageDeliveryCompletionService
-from integration_api.message_processing.models import Base, Message, RouteProcessingResult
+from integration_api.message_processing.models import Base, Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.processing import EventProcessingService
 from integration_api.message_processing.routing import StaticRouteProvider
 from integration_api.message_processing.service import EventIngestionService
 from integration_api.message_processing.transformation import OrderCreatedToCrmTransformation, RouteTransformationProvider
 from integration_api.message_processing.validation import PydanticSourceValidator
 from shared.database import create_database_engine, create_session_factory
+from shared.messaging.contracts import DeliveryCompletedPayload, DeliveryRequestedPayload, InternalEventEnvelope
 
 
 def _event(event_id: str = "event-001") -> dict[str, object]:
@@ -55,13 +57,13 @@ def _services(executor: object | None = None, route_provider: object | None = No
     DeliveryBase.metadata.create_all(engine)
     session_factory = create_session_factory(engine)
     processor = DeliveryProcessor(
-        session_factory, executor or RecordingExecutor(), MessageDeliveryCompletionService(session_factory), stale_processing_timeout_seconds=60
+        session_factory, executor or RecordingExecutor(), None, stale_processing_timeout_seconds=60
     )
     processing = EventProcessingService(
         session_factory,
         route_provider or StaticRouteProvider("http://crm:8000", "http://warehouse:8081"),
         RouteTransformationProvider(),
-        DeliveryRequestService(session_factory, RetryPolicySnapshot(3, "exponential", 5, 300, 2, "TIMEOUT")),
+        RetryPolicySnapshot(3, "exponential", 5, 300, 2, "TIMEOUT"),
     )
     return session_factory, EventIngestionService(session_factory, PydanticSourceValidator()), processing, processor
 
@@ -70,7 +72,19 @@ def _ingest_and_process(ingestion: EventIngestionService, processing: EventProce
     result = ingestion.ingest(ExternalEventEnvelope.model_validate(data))
     if not result.duplicate:
         processing.process(result.message_id)
+        requested_consumer = DeliveryRequestedConsumer(processor._session_factory)
+        with processor._session_factory() as session:
+            requested = list(session.scalars(select(ProcessingOutboxEvent)))
+        for item in requested:
+            envelope = InternalEventEnvelope.model_validate(item.envelope)
+            requested_consumer.handle(envelope, DeliveryRequestedPayload.model_validate(envelope.payload))
         processor.process_available()
+        completion_consumer = MessageCompletionConsumer(processor._session_factory)
+        with processor._session_factory() as session:
+            completed = list(session.scalars(select(DeliveryOutboxEvent).where(DeliveryOutboxEvent.event_type == "delivery.completed")))
+        for item in completed:
+            envelope = InternalEventEnvelope.model_validate(item.envelope)
+            completion_consumer.handle(envelope, DeliveryCompletedPayload.model_validate(envelope.payload))
     return result
 
 

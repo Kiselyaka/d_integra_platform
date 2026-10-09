@@ -41,3 +41,54 @@ class RouteProcessingResult(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProcessingOutboxEvent(Base):
+    """Processing-owned event persisted before it is offered to Kafka."""
+
+    __tablename__ = "processing_outbox_events"
+    __table_args__ = (UniqueConstraint("event_id", name="uq_processing_outbox_events_event_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    topic: Mapped[str] = mapped_column(String(255), nullable=False)
+    message_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    envelope: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publish_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_publish_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publish_lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    publish_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProcessingInboxMessage(Base):
+    __tablename__ = "processing_inbox_messages"
+    __table_args__ = (UniqueConstraint("consumer_name", "event_id", name="uq_processing_inbox_consumer_event"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    consumer_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ProcessingDeliveryCompletion(Base):
+    """Terminal Delivery fact projected into the Processing-owned persistence."""
+
+    __tablename__ = "processing_delivery_completions"
+    __table_args__ = (
+        UniqueConstraint("route_processing_result_id", name="uq_processing_completion_route_result"),
+        UniqueConstraint("delivery_id", name="uq_processing_completion_delivery"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    route_processing_result_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    delivery_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    terminal_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

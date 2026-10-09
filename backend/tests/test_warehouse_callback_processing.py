@@ -3,16 +3,18 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from delivery_service.delivery.application import DeliveryProcessor, DeliveryRequestService, RetryPolicySnapshot
-from delivery_service.delivery.models import Delivery, DeliveryBase
+from delivery_service.delivery.application import DeliveryProcessor, RetryPolicySnapshot
+from delivery_service.delivery.models import Delivery, DeliveryBase, DeliveryOutboxEvent
+from delivery_service.delivery.requested_consumer import DeliveryRequestedConsumer
 from delivery_service.delivery.ports import DeliveryExecution
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.delivery_completion import MessageDeliveryCompletionService
-from integration_api.message_processing.models import Base, Message, RouteProcessingResult
+from integration_api.message_processing.completion_consumer import MessageCompletionConsumer
+from integration_api.message_processing.models import Base, Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.processing import EventProcessingService
 from integration_api.message_processing.routing import StaticRouteProvider
 from integration_api.message_processing.transformation import RouteTransformationProvider
 from shared.database import create_database_engine, create_session_factory
+from shared.messaging.contracts import DeliveryCompletedPayload, DeliveryRequestedPayload, InternalEventEnvelope
 
 
 class RecordingExecutor:
@@ -62,12 +64,24 @@ def test_warehouse_callback_creates_then_delivers_its_own_delivery(
     EventProcessingService(
         session_factory, StaticRouteProvider("http://crm:8000", "http://warehouse:8081", "http://mini-shop:8002"),
         RouteTransformationProvider(),
-        DeliveryRequestService(session_factory, RetryPolicySnapshot(3, "exponential", 5, 300, 2, "TIMEOUT")),
+        RetryPolicySnapshot(3, "exponential", 5, 300, 2, "TIMEOUT"),
     ).process("callback-message-451")
+    with session_factory() as session:
+        requested = list(session.scalars(select(ProcessingOutboxEvent)))
+    requested_consumer = DeliveryRequestedConsumer(session_factory)
+    for item in requested:
+        envelope = InternalEventEnvelope.model_validate(item.envelope)
+        requested_consumer.handle(envelope, DeliveryRequestedPayload.model_validate(envelope.payload))
     executor = RecordingExecutor()
-    DeliveryProcessor(session_factory, executor, MessageDeliveryCompletionService(session_factory), 60).process_available(
+    DeliveryProcessor(session_factory, executor, None, 60).process_available(
         datetime(2026, 10, 9, tzinfo=UTC)
     )
+    with session_factory() as session:
+        completed = list(session.scalars(select(DeliveryOutboxEvent).where(DeliveryOutboxEvent.event_type == "delivery.completed")))
+    completion_consumer = MessageCompletionConsumer(session_factory)
+    for item in completed:
+        envelope = InternalEventEnvelope.model_validate(item.envelope)
+        completion_consumer.handle(envelope, DeliveryCompletedPayload.model_validate(envelope.payload))
 
     assert len(executor.deliveries) == 1
     delivery = executor.deliveries[0]
