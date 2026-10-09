@@ -30,9 +30,44 @@ class TargetDeliveryPort(Protocol):
     def deliver(self, route: "IntegrationRoute", payload: TargetPayload, idempotency_key: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class RetryPolicyConfiguration:
+    """Immutable retry settings resolved before a Delivery is requested."""
+
+    id: str
+    max_attempts: int
+    strategy: str
+    initial_delay_seconds: int
+    max_delay_seconds: int
+    multiplier: int
+    retryable_errors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class IntegrationRoute:
-    def __init__(self, key: str, version: int, target_base_url: str, target_system: str = "crm") -> None:
-        self.key = key
-        self.version = version
-        self.target_base_url = target_base_url
-        self.target_system = target_system
+    """Runtime configuration snapshot owned by the Configuration Context.
+
+    The first four fields retain the old M2 construction shape for focused
+    legacy tests. Production M6 routes are always supplied by PostgreSQL and
+    include the remaining immutable configuration fields.
+    """
+
+    key: str
+    version: int
+    target_base_url: str
+    target_system: str = "crm"
+    id: str | None = None
+    target_endpoint: str = ""
+    http_method: str = "POST"
+    source_format: str = "JSON"
+    target_format: str = "JSON"
+    transformation_id: str | None = None
+    transformation_key: str | None = None
+    transformation_version: int | None = None
+    transformation_engine_type: str | None = None
+    validation_schema_key: str | None = None
+    validation_schema_version: int | None = None
+    retry_policy: RetryPolicyConfiguration | None = None
+    connect_timeout_ms: int = 5000
+    read_timeout_ms: int = 5000
+    configuration_error: str | None = None

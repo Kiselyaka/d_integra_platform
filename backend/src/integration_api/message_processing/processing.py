@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.http_delivery import target_http_method_for_route, target_url_for_route
+from integration_api.configuration.routes import ConfigurationError
 from integration_api.message_processing.models import Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.ports import IntegrationRoute, RouteProvider, RouteTransformationPort, TargetPayload
 from shared.messaging.contracts import InternalEventEnvelope, envelope_json, utc_now
@@ -27,12 +27,14 @@ class EventProcessingService:
         session_factory: sessionmaker[Session],
         route_provider: RouteProvider,
         transformer: RouteTransformationPort,
-        retry_policy: object,
+        retry_policy: object | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._route_provider = route_provider
         self._transformer = transformer
-        self._retry_policy = retry_policy
+        # Kept only for M4/M5 focused fixtures. The production M6 provider
+        # supplies the retry snapshot as part of each resolved route.
+        self._fallback_retry_policy = retry_policy
 
     def process(self, message_id: str) -> None:
         with self._session_factory() as session:
@@ -48,7 +50,13 @@ class EventProcessingService:
                 schema_version=message.schema_version,
                 payload=message.payload,
             )
-            routes = self._route_provider.find_matching_routes(event)
+            try:
+                routes = self._route_provider.find_matching_routes(event)
+            except ConfigurationError as error:
+                message.status = "ROUTING_FAILED"
+                message.validation_error = f"CONFIGURATION_ERROR: {error}"
+                session.commit()
+                return
             if not routes:
                 message.status = "NO_ROUTE"
                 session.commit()
@@ -57,6 +65,9 @@ class EventProcessingService:
         requested_count = 0
         for route in routes:
             logger.info("route_matched", extra={"message_id": message_id, "route_key": route.key})
+            if route.configuration_error is not None:
+                self._record_failure(message_id, route, "CONFIGURATION_ERROR", route.configuration_error)
+                continue
             try:
                 target_payload = self._transformer.transform(route, event)
             except Exception as exc:
@@ -101,6 +112,11 @@ class EventProcessingService:
                 message_id=message_id,
                 route_key=route.key,
                 route_version=route.version,
+                route_id=route.id,
+                transformation_id=route.transformation_id,
+                transformation_version=route.transformation_version,
+                validation_schema_key=route.validation_schema_key,
+                validation_schema_version=route.validation_schema_version,
                 status="DELIVERY_REQUESTED",
                 completed_at=now,
             )
@@ -158,6 +174,11 @@ class EventProcessingService:
                     message_id=message_id,
                     route_key=route.key,
                     route_version=route.version,
+                    route_id=route.id,
+                    transformation_id=route.transformation_id,
+                    transformation_version=route.transformation_version,
+                    validation_schema_key=route.validation_schema_key,
+                    validation_schema_version=route.validation_schema_version,
                     status=status,
                     error=error,
                     completed_at=utc_now(),
@@ -176,7 +197,9 @@ class EventProcessingService:
         target_payload: TargetPayload,
         now: datetime,
     ) -> InternalEventEnvelope:
-        policy = self._retry_policy
+        policy = route.retry_policy or self._fallback_retry_policy
+        if policy is None:
+            raise ConfigurationError(f"Route {route.key} has no retry policy")
         content_format = "JSON" if target_payload.content_type.startswith("application/json") else "XML"
         retryable = getattr(policy, "retryable_errors")
         return InternalEventEnvelope(
@@ -192,8 +215,10 @@ class EventProcessingService:
                 "route": {"id": route.key, "version": route.version},
                 "target": {
                     "system_code": route.target_system,
-                    "url": target_url_for_route(route),
-                    "http_method": target_http_method_for_route(route),
+                    "url": _target_url(route),
+                    "http_method": route.http_method,
+                    "connect_timeout_ms": route.connect_timeout_ms,
+                    "read_timeout_ms": route.read_timeout_ms,
                 },
                 "content": {
                     "format": content_format,
@@ -210,3 +235,12 @@ class EventProcessingService:
                 },
             },
         )
+
+
+def _target_url(route: IntegrationRoute) -> str:
+    """Resolve the URL from the Configuration Context snapshot only."""
+
+    endpoint = route.target_endpoint or ""
+    if not endpoint.startswith("/"):
+        endpoint = f"/{endpoint}"
+    return f"{route.target_base_url.rstrip('/')}{endpoint}"

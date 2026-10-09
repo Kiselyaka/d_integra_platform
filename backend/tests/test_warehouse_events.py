@@ -37,7 +37,7 @@ def test_parser_creates_the_generic_succeeded_envelope() -> None:
     event = parse_warehouse_event(_warehouse_xml().encode("utf-8"))
     assert event.model_dump(mode="json") == {
         "event_id": "3c8830d1-3fe1-4d89-8da6-c9075e09bb60", "event_type": "warehouse.reservation.succeeded",
-        "source_system": "warehouse-1c", "occurred_at": "2026-10-07T18:00:00+03:00",
+            "source_system": "1c-warehouse", "occurred_at": "2026-10-07T18:00:00+03:00",
         "correlation_id": "order-451", "schema_version": 1,
         "payload": {"external_order_id": "451", "status": "SUCCEEDED"},
     }

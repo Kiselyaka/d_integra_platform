@@ -6,14 +6,13 @@ from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
-from delivery_service.delivery.application import RetryPolicySnapshot
 from integration_api.configuration.settings import Settings
+from integration_api.configuration.routes import PostgresRouteConfigurationProvider
 from integration_api.message_processing.completion_consumer import MessageCompletionConsumer
 from integration_api.message_processing.contracts import ExternalEventEnvelope
 from integration_api.message_processing.models import ProcessingOutboxEvent
 from integration_api.message_processing.processing import EventProcessingService
 from integration_api.message_processing.ports import RouteProvider, RouteTransformationPort
-from integration_api.message_processing.routing import StaticRouteProvider
 from integration_api.message_processing.service import EventIngestionService
 from integration_api.message_processing.transformation import RouteTransformationProvider
 from integration_api.message_processing.validation import PydanticSourceValidator
@@ -42,19 +41,10 @@ def create_app(
     engine = create_database_engine(settings.database_url)
     session_factory = session_factory or create_session_factory(engine)
     ingestion_service = EventIngestionService(session_factory, PydanticSourceValidator())
-    retry_policy = RetryPolicySnapshot(
-        max_attempts=settings.delivery_max_attempts,
-        strategy=settings.delivery_retry_strategy,
-        initial_delay_seconds=settings.delivery_retry_initial_delay_seconds,
-        max_delay_seconds=settings.delivery_retry_max_delay_seconds,
-        multiplier=settings.delivery_retry_multiplier,
-        retryable_errors="TIMEOUT,CONNECTION_ERROR,REMOTE_SERVER_ERROR,RATE_LIMITED",
-    )
     processing_service = EventProcessingService(
         session_factory,
-        route_provider or StaticRouteProvider(settings.crm_base_url, settings.warehouse_base_url, settings.mini_shop_base_url),
+        route_provider or PostgresRouteConfigurationProvider(session_factory),
         transformer or RouteTransformationProvider(),
-        retry_policy,
     )
     producer = AioKafkaProducerAdapter(settings.kafka_bootstrap_servers)
     outbox_publisher = OutboxPublisher(session_factory, ProcessingOutboxEvent, producer)

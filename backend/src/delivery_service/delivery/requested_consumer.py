@@ -136,6 +136,8 @@ def _delivery_from_event(envelope: InternalEventEnvelope, payload: DeliveryReque
         transformed_payload=transformed_payload,
         target_url=target.url,
         http_method=target.http_method,
+        connect_timeout_ms=target.connect_timeout_ms,
+        read_timeout_ms=target.read_timeout_ms,
         max_attempts=retry.max_attempts,
         retry_strategy=retry.strategy,
         retry_initial_delay_seconds=retry.initial_delay_seconds,

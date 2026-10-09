@@ -29,26 +29,12 @@ class DeliveryTransportError(RuntimeError):
         self.delivery_failure = failure
 
 
-def target_url_for_route(route: IntegrationRoute) -> str:
-    paths = {
-        "crm": "/api/integration/orders",
-        "warehouse": "/hs/reservations/",
-        "mini-shop": "/api/integration/reservation-results",
-    }
-    try:
-        return f"{route.target_base_url.rstrip('/')}{paths[route.target_system]}"
-    except KeyError as error:
-        raise RuntimeError(f"No target URL is configured for route {route.key}") from error
-
-
-def target_http_method_for_route(route: IntegrationRoute) -> str:
-    return "POST"
-
-
 class HttpDeliveryExecutor(DeliveryExecutorPort):
     """Executes an immutable Delivery snapshot rather than a live route."""
 
-    def __init__(self, timeout_seconds: float) -> None:
+    def __init__(self, timeout_seconds: float = 5.0) -> None:
+        # Fallback only supports M4 fixtures and M5 historic rows. New M6
+        # Delivery snapshots carry system-specific timeouts from configuration.
         self._timeout_seconds = timeout_seconds
 
     def execute(self, delivery: Delivery) -> DeliveryExecution:
@@ -62,7 +48,13 @@ class HttpDeliveryExecutor(DeliveryExecutorPort):
                 )
             )
         headers = {"Content-Type": delivery.payload_format, "Idempotency-Key": delivery.idempotency_key}
-        kwargs: dict[str, object] = {"headers": headers, "timeout": self._timeout_seconds}
+        timeout = httpx.Timeout(
+            connect=delivery.connect_timeout_ms / 1000,
+            read=delivery.read_timeout_ms / 1000,
+            write=delivery.read_timeout_ms / 1000,
+            pool=delivery.connect_timeout_ms / 1000,
+        )
+        kwargs: dict[str, object] = {"headers": headers, "timeout": timeout}
         try:
             if delivery.payload_format.startswith("application/json"):
                 kwargs["json"] = json.loads(delivery.transformed_payload)
@@ -94,7 +86,7 @@ class HttpDeliveryExecutor(DeliveryExecutorPort):
 
 
 def _is_successful_delivery_response(target_system: str, status_code: int) -> bool:
-    if target_system == "warehouse":
+    if target_system in {"warehouse", "1c-warehouse"}:
         return status_code == 202
     return 200 <= status_code < 300
 

@@ -65,10 +65,10 @@ class OrderCreatedToWarehouseReservationTransformation:
 
 class WarehouseReservationSucceededToMiniShopTransformation:
     def transform(self, event: ExternalEventEnvelope) -> dict[str, Any]:
-        if (event.source_system, event.event_type, event.schema_version) != (
-            "warehouse-1c",
-            "warehouse.reservation.succeeded",
-            1,
+        if (
+            event.source_system not in {"1c-warehouse", "warehouse-1c"}
+            or event.event_type != "warehouse.reservation.succeeded"
+            or event.schema_version != 1
         ):
             raise ValueError("No Mini Shop succeeded transformation is registered for this event")
         source = WarehouseReservationSucceededV1.model_validate(event.payload)
@@ -81,10 +81,10 @@ class WarehouseReservationSucceededToMiniShopTransformation:
 
 class WarehouseReservationFailedToMiniShopTransformation:
     def transform(self, event: ExternalEventEnvelope) -> dict[str, Any]:
-        if (event.source_system, event.event_type, event.schema_version) != (
-            "warehouse-1c",
-            "warehouse.reservation.failed",
-            1,
+        if (
+            event.source_system not in {"1c-warehouse", "warehouse-1c"}
+            or event.event_type != "warehouse.reservation.failed"
+            or event.schema_version != 1
         ):
             raise ValueError("No Mini Shop failed transformation is registered for this event")
         source = WarehouseReservationFailedV1.model_validate(event.payload)
@@ -98,7 +98,12 @@ class WarehouseReservationFailedToMiniShopTransformation:
 
 
 class RouteTransformationProvider(RouteTransformationPort):
-    """Selects an explicit M2 transformation for each static route."""
+    """Transitional M6 registry for configuration-selected BUILTIN handlers.
+
+    The route selects a stable transformation key from PostgreSQL. This
+    registry intentionally knows no target systems and makes no routing
+    decision; M7 will replace its handlers with FIELD_MAPPING_V1 execution.
+    """
 
     def __init__(
         self,
@@ -107,20 +112,41 @@ class RouteTransformationProvider(RouteTransformationPort):
         warehouse_succeeded_to_mini_shop: WarehouseReservationSucceededToMiniShopTransformation | None = None,
         warehouse_failed_to_mini_shop: WarehouseReservationFailedToMiniShopTransformation | None = None,
     ) -> None:
-        self._crm_transformation = crm_transformation or OrderCreatedToCrmTransformation()
-        self._warehouse_transformation = warehouse_transformation or OrderCreatedToWarehouseReservationTransformation()
-        self._warehouse_succeeded_to_mini_shop = (
-            warehouse_succeeded_to_mini_shop or WarehouseReservationSucceededToMiniShopTransformation()
-        )
-        self._warehouse_failed_to_mini_shop = warehouse_failed_to_mini_shop or WarehouseReservationFailedToMiniShopTransformation()
+        crm = crm_transformation or OrderCreatedToCrmTransformation()
+        warehouse = warehouse_transformation or OrderCreatedToWarehouseReservationTransformation()
+        succeeded = warehouse_succeeded_to_mini_shop or WarehouseReservationSucceededToMiniShopTransformation()
+        failed = warehouse_failed_to_mini_shop or WarehouseReservationFailedToMiniShopTransformation()
+        self._handlers = {
+            "order-created-to-crm": ("application/json", crm.transform),
+            "order-created-to-warehouse-reservation": ("application/xml; charset=utf-8", warehouse.transform),
+            "warehouse-reservation-succeeded-to-mini-shop": ("application/json", succeeded.transform),
+            "warehouse-reservation-failed-to-mini-shop": ("application/json", failed.transform),
+        }
 
     def transform(self, route: IntegrationRoute, event: ExternalEventEnvelope) -> TargetPayload:
-        if route.target_system == "crm":
-            return TargetPayload("application/json", self._crm_transformation.transform(event))
-        if route.target_system == "warehouse":
-            return TargetPayload("application/xml; charset=utf-8", self._warehouse_transformation.transform(event))
-        if route.target_system == "mini-shop" and event.event_type == "warehouse.reservation.succeeded":
-            return TargetPayload("application/json", self._warehouse_succeeded_to_mini_shop.transform(event))
-        if route.target_system == "mini-shop" and event.event_type == "warehouse.reservation.failed":
-            return TargetPayload("application/json", self._warehouse_failed_to_mini_shop.transform(event))
-        raise ValueError(f"No transformation is registered for route {route.key}")
+        if route.transformation_engine_type not in {None, "BUILTIN"}:
+            raise ValueError(f"Unsupported transformation engine: {route.transformation_engine_type}")
+        try:
+            content_type, handler = self._handlers[route.transformation_key or _legacy_transformation_key(route, event)]
+        except KeyError as error:
+            raise ValueError(f"No transformation is registered for route {route.key}") from error
+        return TargetPayload(content_type, handler(event))
+
+
+def _legacy_transformation_key(route: IntegrationRoute, event: ExternalEventEnvelope) -> str:
+    """Temporary compatibility only for direct M1--M5 unit fixtures."""
+
+    legacy = {
+        "crm": "order-created-to-crm",
+        "warehouse": "order-created-to-warehouse-reservation",
+        "1c-warehouse": "order-created-to-warehouse-reservation",
+    }
+    if route.target_system == "mini-shop":
+        if event.event_type == "warehouse.reservation.succeeded":
+            return "warehouse-reservation-succeeded-to-mini-shop"
+        if event.event_type == "warehouse.reservation.failed":
+            return "warehouse-reservation-failed-to-mini-shop"
+    try:
+        return legacy[route.target_system]
+    except KeyError as error:
+        raise ValueError(f"No legacy transformation mapping for {route.key}") from error

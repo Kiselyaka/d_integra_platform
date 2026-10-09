@@ -76,6 +76,8 @@ class Delivery(DeliveryBase):
     transformed_payload: Mapped[str] = mapped_column(Text, nullable=False)
     target_url: Mapped[str] = mapped_column(Text, nullable=False)
     http_method: Mapped[str] = mapped_column(String(16), nullable=False)
+    connect_timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=5000)
+    read_timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=5000)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
     retry_strategy: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -115,6 +117,8 @@ class Delivery(DeliveryBase):
         transformed_payload: str,
         target_url: str,
         http_method: str,
+        connect_timeout_ms: int = 5000,
+        read_timeout_ms: int = 5000,
         max_attempts: int,
         retry_strategy: str,
         retry_initial_delay_seconds: int,
@@ -135,6 +139,8 @@ class Delivery(DeliveryBase):
             transformed_payload=transformed_payload,
             target_url=target_url,
             http_method=http_method,
+            connect_timeout_ms=connect_timeout_ms,
+            read_timeout_ms=read_timeout_ms,
             attempt_count=0,
             max_attempts=max_attempts,
             retry_strategy=retry_strategy,

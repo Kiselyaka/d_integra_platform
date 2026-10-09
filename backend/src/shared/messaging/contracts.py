@@ -41,6 +41,8 @@ class DeliveryTargetSnapshot(BaseModel):
     system_code: str
     url: str
     http_method: str
+    connect_timeout_ms: int = Field(default=5000, ge=1)
+    read_timeout_ms: int = Field(default=5000, ge=1)
 
 
 class DeliveryContentSnapshot(BaseModel):

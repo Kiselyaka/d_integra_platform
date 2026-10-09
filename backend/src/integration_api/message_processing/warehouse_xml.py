@@ -33,7 +33,10 @@ def parse_warehouse_event(xml_body: bytes) -> ExternalEventEnvelope:
     envelope_data: dict[str, Any] = {
         "event_id": _required_text(root, "EventId"),
         "event_type": event_type,
-        "source_system": "warehouse-1c",
+        # M6 normalizes the former internal code ``warehouse-1c`` to the
+        # persistent ExternalSystem.code used by route lookup. This does not
+        # change the 1C XML wire contract.
+        "source_system": "1c-warehouse",
         "occurred_at": _required_text(root, "OccurredAt"),
         "schema_version": _schema_version(root),
         "payload": payload,

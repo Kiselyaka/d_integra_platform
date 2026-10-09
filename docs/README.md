@@ -11,6 +11,7 @@ Milestone documentation:
 - [Milestone 3 — полный бизнес-цикл через Warehouse callback](milestones/milestone-3.md)
 - [Milestone 4 — Delivery, retry и stale recovery](milestones/milestone-4.md)
 - [Milestone 5 — Kafka, transactional Outbox и Inbox](milestones/milestone-5.md)
+- [Milestone 6 — Configuration Context](milestones/milestone-6.md)
 
 Published contracts:
 

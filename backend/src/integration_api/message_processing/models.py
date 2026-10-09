@@ -37,6 +37,12 @@ class RouteProcessingResult(Base):
     message_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     route_key: Mapped[str] = mapped_column(String(128), nullable=False)
     route_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Configuration references are logical history, not FKs across contexts.
+    route_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    transformation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    transformation_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    validation_schema_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    validation_schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

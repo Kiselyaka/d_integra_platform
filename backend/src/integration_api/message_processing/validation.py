@@ -14,6 +14,10 @@ class PydanticSourceValidator:
     def validate(self, event: ExternalEventEnvelope) -> str | None:
         payload_model = {
             ("mini-shop", "order.created", 1): OrderCreatedPayload,
+            ("1c-warehouse", "warehouse.reservation.succeeded", 1): WarehouseReservationSucceededV1,
+            ("1c-warehouse", "warehouse.reservation.failed", 1): WarehouseReservationFailedV1,
+            # Historical records from M3--M5 retain their original logical
+            # source identifier and remain readable during the M6 transition.
             ("warehouse-1c", "warehouse.reservation.succeeded", 1): WarehouseReservationSucceededV1,
             ("warehouse-1c", "warehouse.reservation.failed", 1): WarehouseReservationFailedV1,
         }.get((event.source_system, event.event_type, event.schema_version))

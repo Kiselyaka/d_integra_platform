@@ -64,6 +64,15 @@ def test_transforms_warehouse_callback_to_mini_shop_result_contract(
     assert payload == TargetPayload("application/json", expected_body)
 
 
+def test_transforms_normalized_m6_warehouse_source_code() -> None:
+    route = IntegrationRoute("warehouse-to-mini-shop", 1, "http://mini-shop:8002", "mini-shop")
+    event = warehouse_event("warehouse.reservation.succeeded").model_copy(update={"source_system": "1c-warehouse"})
+
+    payload = RouteTransformationProvider().transform(route, event)
+
+    assert payload.body["reservation_result"] == "succeeded"
+
+
 def test_mini_shop_http_adapter_posts_json_result(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
