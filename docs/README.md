@@ -8,10 +8,12 @@ Milestone documentation:
 - [Milestone 1 — итоговый отчёт реализации](milestones/milestone-1.md)
 - [Milestone 1+ — Warehouse 1С inbound events](milestones/milestone-1-plus.md)
 - [Milestone 2 — fan-out `order.created` в CRM и Warehouse 1С](milestones/milestone-2.md)
+- [Milestone 3 — полный бизнес-цикл через Warehouse callback](milestones/milestone-3.md)
 
 Published contracts:
 
 - [Warehouse ReservationRequest v1](contracts/warehouse-reservation-request-v1.md)
+- [Mini Shop Reservation Result v1](contracts/mini-shop-reservation-result-v1.md)
 
 Published Milestone 1 contracts:
 

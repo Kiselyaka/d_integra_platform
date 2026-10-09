@@ -6,6 +6,7 @@ from integration_api.configuration.settings import Settings
 from integration_api.message_processing.contracts import ExternalEventEnvelope
 from integration_api.message_processing.http_delivery import (
     CrmHttpTargetDeliveryAdapter,
+    MiniShopHttpTargetDeliveryAdapter,
     RouteTargetDeliveryAdapter,
     WarehouseHttpTargetDeliveryAdapter,
 )
@@ -40,12 +41,13 @@ def create_app(
     ingestion_service = EventIngestionService(session_factory, PydanticSourceValidator())
     processing_service = EventProcessingService(
         session_factory,
-        route_provider or StaticRouteProvider(settings.crm_base_url, settings.warehouse_base_url),
+        route_provider or StaticRouteProvider(settings.crm_base_url, settings.warehouse_base_url, settings.mini_shop_base_url),
         transformer or RouteTransformationProvider(),
         target_delivery
         or RouteTargetDeliveryAdapter(
             CrmHttpTargetDeliveryAdapter(settings.crm_delivery_timeout_seconds),
             WarehouseHttpTargetDeliveryAdapter(settings.warehouse_delivery_timeout_seconds),
+            MiniShopHttpTargetDeliveryAdapter(settings.mini_shop_delivery_timeout_seconds),
         ),
     )
 

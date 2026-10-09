@@ -10,4 +10,6 @@ class Settings(BaseSettings):
     crm_delivery_timeout_seconds: float = 5.0
     warehouse_base_url: str = "http://host.docker.internal:8081/WarehouseDemo_Base"
     warehouse_delivery_timeout_seconds: float = 5.0
+    mini_shop_base_url: str = "http://mini-shop:8002"
+    mini_shop_delivery_timeout_seconds: float = 5.0
     log_level: str = "INFO"

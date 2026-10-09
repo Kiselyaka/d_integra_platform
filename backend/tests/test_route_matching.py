@@ -23,7 +23,7 @@ def test_order_created_matches_crm_and_warehouse_routes() -> None:
     ]
 
 
-def test_warehouse_callback_has_no_matched_route() -> None:
+def test_warehouse_succeeded_callback_matches_mini_shop_route() -> None:
     provider = StaticRouteProvider("http://crm:8000", "http://host.docker.internal:8081/WarehouseDemo_Base")
     event = ExternalEventEnvelope(
         event_id="event-002",
@@ -34,4 +34,26 @@ def test_warehouse_callback_has_no_matched_route() -> None:
         payload={},
     )
 
-    assert provider.find_matching_routes(event) == []
+    routes = provider.find_matching_routes(event)
+
+    assert [(route.key, route.version, route.target_system) for route in routes] == [
+        ("warehouse-reservation-succeeded-to-mini-shop", 1, "mini-shop")
+    ]
+
+
+def test_warehouse_failed_callback_matches_mini_shop_route() -> None:
+    provider = StaticRouteProvider("http://crm:8000", "http://host.docker.internal:8081/WarehouseDemo_Base")
+    event = ExternalEventEnvelope(
+        event_id="event-003",
+        source_system="warehouse-1c",
+        event_type="warehouse.reservation.failed",
+        occurred_at=datetime(2026, 10, 9, tzinfo=UTC),
+        schema_version=1,
+        payload={},
+    )
+
+    routes = provider.find_matching_routes(event)
+
+    assert [(route.key, route.version, route.target_system) for route in routes] == [
+        ("warehouse-reservation-failed-to-mini-shop", 1, "mini-shop")
+    ]

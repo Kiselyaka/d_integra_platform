@@ -14,6 +14,10 @@ class WarehouseDeliveryError(RuntimeError):
     pass
 
 
+class MiniShopDeliveryError(RuntimeError):
+    pass
+
+
 class CrmHttpTargetDeliveryAdapter(TargetDeliveryPort):
     def __init__(self, timeout_seconds: float) -> None:
         self._timeout_seconds = timeout_seconds
@@ -63,11 +67,36 @@ class WarehouseHttpTargetDeliveryAdapter(TargetDeliveryPort):
         logger.info("warehouse_delivery_completed", extra={"route_key": route.key})
 
 
+class MiniShopHttpTargetDeliveryAdapter(TargetDeliveryPort):
+    def __init__(self, timeout_seconds: float) -> None:
+        self._timeout_seconds = timeout_seconds
+
+    def deliver(self, route: IntegrationRoute, payload: TargetPayload, idempotency_key: str) -> None:
+        if not isinstance(payload.body, dict):
+            raise MiniShopDeliveryError("Mini Shop delivery requires a JSON object payload")
+        url = f"{route.target_base_url}/api/integration/reservation-results"
+        logger.info("mini_shop_delivery_started", extra={"route_key": route.key})
+        try:
+            response = httpx.post(
+                url,
+                json=payload.body,
+                headers={"Idempotency-Key": idempotency_key},
+                timeout=self._timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("mini_shop_delivery_failed", extra={"route_key": route.key, "error": str(exc)})
+            raise MiniShopDeliveryError(str(exc)) from exc
+        logger.info("mini_shop_delivery_completed", extra={"route_key": route.key})
+
+
 class RouteTargetDeliveryAdapter(TargetDeliveryPort):
     """Dispatches a target payload to the dedicated HTTP adapter for its route."""
 
-    def __init__(self, crm_delivery: TargetDeliveryPort, warehouse_delivery: TargetDeliveryPort) -> None:
-        self._deliveries = {"crm": crm_delivery, "warehouse": warehouse_delivery}
+    def __init__(
+        self, crm_delivery: TargetDeliveryPort, warehouse_delivery: TargetDeliveryPort, mini_shop_delivery: TargetDeliveryPort
+    ) -> None:
+        self._deliveries = {"crm": crm_delivery, "warehouse": warehouse_delivery, "mini-shop": mini_shop_delivery}
 
     def deliver(self, route: IntegrationRoute, payload: TargetPayload, idempotency_key: str) -> None:
         try:
