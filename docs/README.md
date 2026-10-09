@@ -9,6 +9,7 @@ Milestone documentation:
 - [Milestone 1+ — Warehouse 1С inbound events](milestones/milestone-1-plus.md)
 - [Milestone 2 — fan-out `order.created` в CRM и Warehouse 1С](milestones/milestone-2.md)
 - [Milestone 3 — полный бизнес-цикл через Warehouse callback](milestones/milestone-3.md)
+- [Milestone 4 — Delivery, retry и stale recovery](milestones/milestone-4.md)
 
 Published contracts:
 

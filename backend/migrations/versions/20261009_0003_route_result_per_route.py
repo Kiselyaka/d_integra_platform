@@ -10,16 +10,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint(
-        "uq_route_processing_results_message_route",
-        "route_processing_results",
-        ["message_id", "route_key", "route_version"],
-    )
+    # SQLite needs table recreation for an ALTER TABLE constraint.  Batch mode
+    # keeps this migration executable both in production PostgreSQL and clean
+    # in-memory SQLite migration tests.
+    with op.batch_alter_table("route_processing_results") as batch_op:
+        batch_op.create_unique_constraint(
+            "uq_route_processing_results_message_route",
+            ["message_id", "route_key", "route_version"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_route_processing_results_message_route",
-        "route_processing_results",
-        type_="unique",
-    )
+    with op.batch_alter_table("route_processing_results") as batch_op:
+        batch_op.drop_constraint("uq_route_processing_results_message_route", type_="unique")

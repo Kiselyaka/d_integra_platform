@@ -1,2 +1,1 @@
-"""Reserved boundary for delivery processing in later milestones."""
-
+"""Delivery aggregate, attempt history, and local M4 processor."""

@@ -88,7 +88,7 @@ def test_warehouse_http_adapter_posts_xml_to_the_published_1c_endpoint(monkeypat
     assert captured == {
         "url": "http://host.docker.internal:8081/WarehouseDemo_Base/hs/reservations/",
         "content": b"<ReservationRequest />",
-        "headers": {"Content-Type": "application/xml; charset=utf-8"},
+        "headers": {"Content-Type": "application/xml; charset=utf-8", "Idempotency-Key": "event-451"},
         "timeout": 2.5,
     }
 
