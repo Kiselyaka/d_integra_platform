@@ -4,8 +4,14 @@ Architecture decision records belong in `adr/`; published contracts belong in `c
 
 Milestone documentation:
 
-- [Milestone 1 — final implementation report](https://github.com/Kiselyaka/d_integra_enviro/blob/milestone-1/docs/milestone-1-progress.md)
+- [Milestone 0 — стартовая инфраструктура](milestones/milestone-0.md)
+- [Milestone 1 — итоговый отчёт реализации](milestones/milestone-1.md)
 - [Milestone 1+ — Warehouse 1С inbound events](milestones/milestone-1-plus.md)
+- [Milestone 2 — fan-out `order.created` в CRM и Warehouse 1С](milestones/milestone-2.md)
+
+Published contracts:
+
+- [Warehouse ReservationRequest v1](contracts/warehouse-reservation-request-v1.md)
 
 Published Milestone 1 contracts:
 

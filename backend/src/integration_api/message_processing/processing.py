@@ -6,19 +6,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from integration_api.message_processing.contracts import ExternalEventEnvelope
 from integration_api.message_processing.models import Message, RouteProcessingResult
-from integration_api.message_processing.ports import RouteProvider, TargetDeliveryPort, TransformationPort
+from integration_api.message_processing.ports import IntegrationRoute, RouteProvider, RouteTransformationPort, TargetDeliveryPort
 
 logger = logging.getLogger(__name__)
 
 
 class EventProcessingService:
-    """Runs the single M1 route after ingress; no Delivery aggregate or retry exists yet."""
+    """Runs all M2 matched routes; no Delivery aggregate or retry exists yet."""
 
     def __init__(
         self,
         session_factory: sessionmaker[Session],
         route_provider: RouteProvider,
-        transformer: TransformationPort,
+        transformer: RouteTransformationPort,
         delivery_port: TargetDeliveryPort,
     ) -> None:
         self._session_factory = session_factory
@@ -40,56 +40,67 @@ class EventProcessingService:
                 schema_version=message.schema_version,
                 payload=message.payload,
             )
-            route = self._route_provider.find_route(event)
-            if route is None:
+            routes = self._route_provider.find_matching_routes(event)
+            if not routes:
                 message.status = "NO_ROUTE"
                 session.commit()
                 return
+        all_succeeded = True
+        for route in routes:
+            result_id = self._start_result(message_id, route)
+            logger.info("route_matched", extra={"message_id": message_id, "route_key": route.key})
+            try:
+                target_payload = self._transformer.transform(route, event)
+                logger.info("transformation_completed", extra={"message_id": message_id, "route_key": route.key})
+            except Exception as exc:
+                all_succeeded = False
+                self._finish_failure(result_id, "TRANSFORMATION_FAILED", str(exc))
+                continue
+
+            try:
+                self._delivery_port.deliver(route, target_payload, event.event_id)
+            except Exception as exc:
+                all_succeeded = False
+                self._finish_failure(result_id, "DELIVERY_FAILED", str(exc))
+                continue
+
+            self._finish_success(result_id)
+
+        with self._session_factory() as session:
+            message = session.get(Message, message_id)
+            if message is None:
+                return
+            message.status = "COMPLETED" if all_succeeded else "ROUTING_FAILED"
+            session.commit()
+
+    def _start_result(self, message_id: str, route: IntegrationRoute) -> str:
+        with self._session_factory() as session:
             result = RouteProcessingResult(
                 id=str(uuid4()),
-                message_id=message.id,
+                message_id=message_id,
                 route_key=route.key,
                 route_version=route.version,
                 status="PROCESSING",
             )
             session.add(result)
             session.commit()
-            result_id = result.id
+            return result.id
 
-        logger.info("route_matched", extra={"message_id": message_id, "route_key": route.key})
-        try:
-            target_payload = self._transformer.transform(event)
-            logger.info("transformation_completed", extra={"message_id": message_id, "route_key": route.key})
-        except Exception as exc:
-            self._finish_failure(message_id, result_id, "TRANSFORMATION_FAILED", str(exc))
-            return
-
-        try:
-            self._delivery_port.deliver(route, target_payload, event.event_id)
-        except Exception as exc:
-            self._finish_failure(message_id, result_id, "DELIVERY_REQUESTED", str(exc))
-            return
-
+    def _finish_success(self, result_id: str) -> None:
         with self._session_factory() as session:
-            message = session.get(Message, message_id)
             result = session.get(RouteProcessingResult, result_id)
-            if message is None or result is None:
+            if result is None:
                 return
-            # M1 shortcut: DELIVERY_REQUESTED means the one synchronous HTTP
-            # request received a 2xx response. A delivery aggregate arrives later.
             result.status = "DELIVERY_REQUESTED"
             result.completed_at = datetime.now(timezone.utc)
-            message.status = "COMPLETED"
             session.commit()
 
-    def _finish_failure(self, message_id: str, result_id: str, route_status: str, error: str) -> None:
+    def _finish_failure(self, result_id: str, route_status: str, error: str) -> None:
         with self._session_factory() as session:
-            message = session.get(Message, message_id)
             result = session.get(RouteProcessingResult, result_id)
-            if message is None or result is None:
+            if result is None:
                 return
             result.status = route_status
             result.error = error
             result.completed_at = datetime.now(timezone.utc)
-            message.status = "ROUTING_FAILED"
             session.commit()

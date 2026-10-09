@@ -8,4 +8,6 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "kafka:9092"
     crm_base_url: str = "http://crm:8000"
     crm_delivery_timeout_seconds: float = 5.0
+    warehouse_base_url: str = "http://host.docker.internal:8081/WarehouseDemo_Base"
+    warehouse_delivery_timeout_seconds: float = 5.0
     log_level: str = "INFO"

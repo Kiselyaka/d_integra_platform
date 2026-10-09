@@ -55,8 +55,8 @@ class FailingDelivery:
 
 
 class NoRouteProvider:
-    def find_route(self, event: ExternalEventEnvelope) -> None:
-        return None
+    def find_matching_routes(self, event: ExternalEventEnvelope) -> list[object]:
+        return []
 
 
 def _client_and_session_factory(delivery: object | None = None, route_provider: object | None = None) -> tuple[TestClient, object]:

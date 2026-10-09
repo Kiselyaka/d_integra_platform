@@ -29,6 +29,9 @@ class Message(Base):
 
 class RouteProcessingResult(Base):
     __tablename__ = "route_processing_results"
+    __table_args__ = (
+        UniqueConstraint("message_id", "route_key", "route_version", name="uq_route_processing_results_message_route"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     message_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)

@@ -4,12 +4,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from integration_api.configuration.settings import Settings
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.http_delivery import HttpTargetDeliveryAdapter
+from integration_api.message_processing.http_delivery import (
+    CrmHttpTargetDeliveryAdapter,
+    RouteTargetDeliveryAdapter,
+    WarehouseHttpTargetDeliveryAdapter,
+)
 from integration_api.message_processing.processing import EventProcessingService
-from integration_api.message_processing.ports import RouteProvider, TargetDeliveryPort, TransformationPort
-from integration_api.message_processing.routing import StaticCrmRouteProvider
+from integration_api.message_processing.ports import RouteProvider, RouteTransformationPort, TargetDeliveryPort
+from integration_api.message_processing.routing import StaticRouteProvider
 from integration_api.message_processing.service import EventIngestionService
-from integration_api.message_processing.transformation import OrderCreatedToCrmTransformation
+from integration_api.message_processing.transformation import RouteTransformationProvider
 from integration_api.message_processing.validation import PydanticSourceValidator
 from integration_api.message_processing.warehouse_xml import WarehouseXmlParseError, parse_warehouse_event
 from shared.database import create_database_engine, create_session_factory
@@ -25,7 +29,7 @@ def create_app(
     settings: Settings | None = None,
     session_factory: sessionmaker[Session] | None = None,
     route_provider: RouteProvider | None = None,
-    transformer: TransformationPort | None = None,
+    transformer: RouteTransformationPort | None = None,
     target_delivery: TargetDeliveryPort | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
@@ -36,9 +40,13 @@ def create_app(
     ingestion_service = EventIngestionService(session_factory, PydanticSourceValidator())
     processing_service = EventProcessingService(
         session_factory,
-        route_provider or StaticCrmRouteProvider(settings.crm_base_url),
-        transformer or OrderCreatedToCrmTransformation(),
-        target_delivery or HttpTargetDeliveryAdapter(settings.crm_delivery_timeout_seconds),
+        route_provider or StaticRouteProvider(settings.crm_base_url, settings.warehouse_base_url),
+        transformer or RouteTransformationProvider(),
+        target_delivery
+        or RouteTargetDeliveryAdapter(
+            CrmHttpTargetDeliveryAdapter(settings.crm_delivery_timeout_seconds),
+            WarehouseHttpTargetDeliveryAdapter(settings.warehouse_delivery_timeout_seconds),
+        ),
     )
 
     def ingest_event(event: ExternalEventEnvelope) -> EventAcceptedResponse:
