@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -60,7 +60,19 @@ class DeliveryFailure:
 class Delivery(DeliveryBase):
     __tablename__ = "deliveries"
     __table_args__ = (
-        UniqueConstraint("route_processing_result_id", name="uq_deliveries_route_processing_result"),
+        # There is one initial execution for a route result. Recovery
+        # executions deliberately share that result and form a separate
+        # lineage through requeued_from_delivery_id.
+        Index(
+            "uq_deliveries_initial_route_processing_result",
+            "route_processing_result_id",
+            unique=True,
+            postgresql_where=text("requeued_from_delivery_id IS NULL"),
+            sqlite_where=text("requeued_from_delivery_id IS NULL"),
+        ),
+        # One child per source makes a repeated requeue command idempotent
+        # without restricting a D1 -> D2 -> D3 recovery chain.
+        UniqueConstraint("requeued_from_delivery_id", name="uq_deliveries_one_requeue_per_source"),
         CheckConstraint("attempt_count >= 0", name="ck_deliveries_attempt_count_nonnegative"),
         CheckConstraint("max_attempts >= 1", name="ck_deliveries_max_attempts_positive"),
     )
@@ -68,6 +80,9 @@ class Delivery(DeliveryBase):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     message_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     route_processing_result_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    requeued_from_delivery_id: Mapped[str | None] = mapped_column(
+        ForeignKey("deliveries.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     route_key: Mapped[str] = mapped_column(String(128), nullable=False)
     route_version: Mapped[int] = mapped_column(Integer, nullable=False)
     target_system: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -108,6 +123,8 @@ class Delivery(DeliveryBase):
         *,
         delivery_id: str | None = None,
         correlation_id: str | None = None,
+        idempotency_key: str | None = None,
+        requeued_from_delivery_id: str | None = None,
         message_id: str,
         route_processing_result_id: str,
         route_key: str,
@@ -131,6 +148,7 @@ class Delivery(DeliveryBase):
             id=delivery_id,
             message_id=message_id,
             route_processing_result_id=route_processing_result_id,
+            requeued_from_delivery_id=requeued_from_delivery_id,
             route_key=route_key,
             route_version=route_version,
             target_system=target_system,
@@ -149,7 +167,7 @@ class Delivery(DeliveryBase):
             retry_multiplier=retry_multiplier,
             retryable_errors=retryable_errors,
             lock_version=1,
-            idempotency_key=delivery_id,
+            idempotency_key=idempotency_key or delivery_id,
             correlation_id=correlation_id,
         )
 

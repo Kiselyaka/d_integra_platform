@@ -250,10 +250,18 @@ class DeliveryProcessor:
         status = DeliveryStatus(delivery.status)
         if status not in {DeliveryStatus.DELIVERED, DeliveryStatus.DEAD_LETTER}:
             return
+        # Initial executions notify Processing so it can complete the original
+        # Message. Recovery executions are operational facts only: publishing
+        # them on the same topics would attempt to rewrite that historical
+        # Message/RPR completion. They keep their own explicit topic/event
+        # names and are consumed only by future operational tooling.
+        recovery = delivery.requeued_from_delivery_id is not None
+        completed_event_type = "delivery.recovery.completed" if recovery else "delivery.completed"
+        completed_topic = "integration.delivery.recovery.completed" if recovery else "integration.delivery.completed"
         existing = session.scalar(
             select(DeliveryOutboxEvent).where(
                 DeliveryOutboxEvent.delivery_id == delivery.id,
-                DeliveryOutboxEvent.event_type == "delivery.completed",
+                DeliveryOutboxEvent.event_type == completed_event_type,
             )
         )
         if existing is not None:
@@ -261,7 +269,7 @@ class DeliveryProcessor:
         completed_at = delivery.completed_at or now
         completed = InternalEventEnvelope(
             event_id=str(uuid4()),
-            event_type="delivery.completed",
+            event_type=completed_event_type,
             aggregate_id=delivery.id,
             occurred_at=completed_at,
             correlation_id=delivery.correlation_id,
@@ -279,15 +287,17 @@ class DeliveryProcessor:
             DeliveryOutboxEvent(
                 id=str(uuid4()), event_id=completed.event_id, event_type=completed.event_type,
                 aggregate_id=completed.aggregate_id, delivery_id=delivery.id,
-                topic="integration.delivery.completed", message_key=delivery.id,
+                topic=completed_topic, message_key=delivery.id,
                 envelope=envelope_json(completed), publish_attempt_count=0,
             )
         )
         if status is not DeliveryStatus.DEAD_LETTER:
             return
+        dead_letter_event_type = "delivery.recovery.dead_lettered" if recovery else "delivery.dead_lettered"
+        dead_letter_topic = "integration.delivery.recovery.dead_lettered" if recovery else "integration.delivery.dead_lettered"
         dead_letter = InternalEventEnvelope(
             event_id=str(uuid4()),
-            event_type="delivery.dead_lettered",
+            event_type=dead_letter_event_type,
             aggregate_id=delivery.id,
             occurred_at=completed_at,
             correlation_id=delivery.correlation_id,
@@ -309,7 +319,7 @@ class DeliveryProcessor:
             DeliveryOutboxEvent(
                 id=str(uuid4()), event_id=dead_letter.event_id, event_type=dead_letter.event_type,
                 aggregate_id=dead_letter.aggregate_id, delivery_id=delivery.id,
-                topic="integration.delivery.dead_lettered", message_key=delivery.id,
+                topic=dead_letter_topic, message_key=delivery.id,
                 envelope=envelope_json(dead_letter), publish_attempt_count=0,
             )
         )

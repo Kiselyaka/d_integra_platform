@@ -13,6 +13,8 @@ Milestone documentation:
 - [Milestone 5 — Kafka, transactional Outbox и Inbox](milestones/milestone-5.md)
 - [Milestone 6 — Configuration Context](milestones/milestone-6.md)
 - [Milestone 7 — FIELD_MAPPING_V1 Transformation Engine](milestones/milestone-7.md)
+- [Milestone 8 — Validation, Preview and Versioning](milestones/milestone-8.md)
+- [Milestone 9 — Operational Query API и безопасный Manual Requeue](milestones/milestone-9.md)
 
 Published contracts:
 
