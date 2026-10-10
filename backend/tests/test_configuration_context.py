@@ -89,6 +89,8 @@ def test_seed_is_idempotent_and_exposes_two_database_driven_order_routes() -> No
         "order-created-to-crm",
         "order-created-to-warehouse-reservation",
     }
+    assert all(route.transformation_engine_type == "FIELD_MAPPING_V1" for route in routes)
+    assert all(route.transformation_definition is not None for route in routes)
     assert all(route.retry_policy is not None for route in routes)
 
 
@@ -222,6 +224,79 @@ def test_transformation_identity_is_selected_by_route_data_not_target_branching(
         assert outbox is not None
         assert outbox.envelope["payload"]["content"]["format"] == "JSON"
         assert outbox.envelope["payload"]["content"]["body"]["external_order_id"] == "order-m6"
+
+
+def test_definition_mutation_changes_only_new_transformation_snapshots() -> None:
+    factory = _factory()
+    processor = EventProcessingService(factory, PostgresRouteConfigurationProvider(factory), RouteTransformationProvider())
+    first = _event("event-definition-a", "order-definition-a")
+    _persist_message(factory, first, "message-definition-a")
+    processor.process("message-definition-a")
+    with factory() as session:
+        transform = session.scalar(select(TransformationDefinition).where(
+            TransformationDefinition.transformation_key == "order-created-to-crm"
+        ))
+        assert transform is not None and transform.definition is not None
+        updated = {**transform.definition, "target": {**transform.definition["target"], "client": {
+            **transform.definition["target"]["client"], "name": {"op": "literal", "value": "Configured name"}
+        }}}
+        transform.definition = updated
+        session.commit()
+    second = _event("event-definition-b", "order-definition-b")
+    _persist_message(factory, second, "message-definition-b")
+    processor.process("message-definition-b")
+    with factory() as session:
+        envelopes = list(session.scalars(select(ProcessingOutboxEvent).order_by(ProcessingOutboxEvent.created_at)))
+        crm_bodies = [item.envelope["payload"]["content"]["body"] for item in envelopes if item.envelope["payload"]["target"]["system_code"] == "crm"]
+        assert [body["client"]["name"] for body in crm_bodies] == ["M6 Test", "Configured name"]
+
+
+def test_invalid_field_mapping_is_configuration_error_but_other_fanout_route_continues() -> None:
+    factory = _factory()
+    with factory() as session:
+        transform = session.scalar(select(TransformationDefinition).where(
+            TransformationDefinition.transformation_key == "order-created-to-crm"
+        ))
+        assert transform is not None
+        transform.definition = {"target": {"unsafe": {"op": "eval", "value": "anything"}}}
+        session.commit()
+    event = _event("event-invalid-definition")
+    _persist_message(factory, event, "message-invalid-definition")
+    EventProcessingService(factory, PostgresRouteConfigurationProvider(factory), RouteTransformationProvider()).process(
+        "message-invalid-definition"
+    )
+    with factory() as session:
+        results = list(session.scalars(select(RouteProcessingResult).order_by(RouteProcessingResult.route_key)))
+        assert [(result.route_key, result.status) for result in results] == [
+            ("mini-shop-order-created-to-crm", "CONFIGURATION_ERROR"),
+            ("mini-shop-order-created-to-warehouse", "DELIVERY_REQUESTED"),
+        ]
+        assert '"category": "CONFIGURATION_INVALID"' in results[0].error
+        assert session.scalar(select(func.count()).select_from(ProcessingOutboxEvent)) == 1
+
+
+def test_runtime_mapping_error_creates_no_delivery_for_that_route() -> None:
+    factory = _factory()
+    with factory() as session:
+        transform = session.scalar(select(TransformationDefinition).where(
+            TransformationDefinition.transformation_key == "order-created-to-crm"
+        ))
+        assert transform is not None
+        transform.definition = {"target": {"missing": {"op": "from", "path": "$.unknown"}}}
+        session.commit()
+    event = _event("event-runtime-definition")
+    _persist_message(factory, event, "message-runtime-definition")
+    EventProcessingService(factory, PostgresRouteConfigurationProvider(factory), RouteTransformationProvider()).process(
+        "message-runtime-definition"
+    )
+    with factory() as session:
+        results = list(session.scalars(select(RouteProcessingResult).order_by(RouteProcessingResult.route_key)))
+        assert [(result.route_key, result.status) for result in results] == [
+            ("mini-shop-order-created-to-crm", "TRANSFORMATION_FAILED"),
+            ("mini-shop-order-created-to-warehouse", "DELIVERY_REQUESTED"),
+        ]
+        assert '"category": "SOURCE_PATH_NOT_FOUND"' in results[0].error
+        assert session.scalar(select(func.count()).select_from(ProcessingOutboxEvent)) == 1
 
 
 def test_repository_constraints_reject_duplicate_transform_and_invalid_retry_policy() -> None:

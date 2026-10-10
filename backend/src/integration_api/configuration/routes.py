@@ -105,6 +105,7 @@ class PostgresRouteConfigurationProvider(RouteProvider):
             transformation_key=transformation.transformation_key if transformation is not None else None,
             transformation_version=transformation.version if transformation is not None else None,
             transformation_engine_type=transformation.engine_type if transformation is not None else None,
+            transformation_definition=transformation.definition if transformation is not None else None,
             validation_schema_key=validation_schema.schema_key if validation_schema is not None else None,
             validation_schema_version=validation_schema.version if validation_schema is not None else None,
             retry_policy=RetryPolicyConfiguration(

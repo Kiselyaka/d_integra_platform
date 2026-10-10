@@ -65,6 +65,7 @@ class IntegrationRoute:
     transformation_key: str | None = None
     transformation_version: int | None = None
     transformation_engine_type: str | None = None
+    transformation_definition: dict[str, Any] | None = None
     validation_schema_key: str | None = None
     validation_schema_version: int | None = None
     retry_policy: RetryPolicyConfiguration | None = None

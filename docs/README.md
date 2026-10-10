@@ -12,6 +12,7 @@ Milestone documentation:
 - [Milestone 4 — Delivery, retry и stale recovery](milestones/milestone-4.md)
 - [Milestone 5 — Kafka, transactional Outbox и Inbox](milestones/milestone-5.md)
 - [Milestone 6 — Configuration Context](milestones/milestone-6.md)
+- [Milestone 7 — FIELD_MAPPING_V1 Transformation Engine](milestones/milestone-7.md)
 
 Published contracts:
 

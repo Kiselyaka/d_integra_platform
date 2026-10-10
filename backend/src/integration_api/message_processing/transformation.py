@@ -7,12 +7,14 @@ from integration_api.message_processing.contracts import (
     WarehouseReservationFailedV1,
     WarehouseReservationSucceededV1,
 )
+from integration_api.message_processing.field_mapping import FieldMappingV1Engine, TransformationConfigurationError
 from integration_api.message_processing.ports import (
     IntegrationRoute,
     RouteTransformationPort,
     TargetPayload,
     TransformationPort,
 )
+from integration_api.message_processing.serialization import serialize_target_document
 
 
 class OrderCreatedToCrmTransformation(TransformationPort):
@@ -98,11 +100,10 @@ class WarehouseReservationFailedToMiniShopTransformation:
 
 
 class RouteTransformationProvider(RouteTransformationPort):
-    """Transitional M6 registry for configuration-selected BUILTIN handlers.
+    """Engine registry; M7 production routes use FIELD_MAPPING_V1 only.
 
-    The route selects a stable transformation key from PostgreSQL. This
-    registry intentionally knows no target systems and makes no routing
-    decision; M7 will replace its handlers with FIELD_MAPPING_V1 execution.
+    BUILTIN remains solely for M1--M6 historical fixtures and rows that may
+    need an explicit compatibility path during an upgrade.
     """
 
     def __init__(
@@ -111,6 +112,7 @@ class RouteTransformationProvider(RouteTransformationPort):
         warehouse_transformation: OrderCreatedToWarehouseReservationTransformation | None = None,
         warehouse_succeeded_to_mini_shop: WarehouseReservationSucceededToMiniShopTransformation | None = None,
         warehouse_failed_to_mini_shop: WarehouseReservationFailedToMiniShopTransformation | None = None,
+        field_mapping_engine: FieldMappingV1Engine | None = None,
     ) -> None:
         crm = crm_transformation or OrderCreatedToCrmTransformation()
         warehouse = warehouse_transformation or OrderCreatedToWarehouseReservationTransformation()
@@ -122,10 +124,20 @@ class RouteTransformationProvider(RouteTransformationPort):
             "warehouse-reservation-succeeded-to-mini-shop": ("application/json", succeeded.transform),
             "warehouse-reservation-failed-to-mini-shop": ("application/json", failed.transform),
         }
+        self._field_mapping_engine = field_mapping_engine or FieldMappingV1Engine()
 
     def transform(self, route: IntegrationRoute, event: ExternalEventEnvelope) -> TargetPayload:
+        if route.transformation_engine_type == "FIELD_MAPPING_V1":
+            if route.transformation_definition is None:
+                raise TransformationConfigurationError("FIELD_MAPPING_V1 route has no definition")
+            canonical_document = self._field_mapping_engine.transform(
+                route.transformation_definition,
+                event.payload,
+                {"event": {"event_id": event.event_id, "event_type": event.event_type, "source_system": event.source_system}},
+            )
+            return serialize_target_document(route.target_format, canonical_document)
         if route.transformation_engine_type not in {None, "BUILTIN"}:
-            raise ValueError(f"Unsupported transformation engine: {route.transformation_engine_type}")
+            raise TransformationConfigurationError(f"Unsupported transformation engine: {route.transformation_engine_type}")
         try:
             content_type, handler = self._handlers[route.transformation_key or _legacy_transformation_key(route, event)]
         except KeyError as error:

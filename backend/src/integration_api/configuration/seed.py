@@ -14,6 +14,7 @@ from integration_api.configuration.models import (
     RetryPolicy,
     TransformationDefinition,
 )
+from integration_api.configuration.demo_definitions import FIELD_MAPPING_V1_DEFINITIONS
 from integration_api.configuration.settings import Settings
 from shared.database import create_database_engine, create_session_factory
 
@@ -56,7 +57,8 @@ def seed_demo_configuration(session: Session, settings: Settings) -> None:
             (TransformationDefinition.transformation_key == key) & (TransformationDefinition.version == 1),
             lambda key=key, source=source, target=target, name=name: TransformationDefinition(
                 id=_id(f"transformation/{key}/1"), transformation_key=key, version=1, name=name,
-                source_format=source, target_format=target, engine_type="BUILTIN", definition=None, enabled=True,
+                source_format=source, target_format=target, engine_type="FIELD_MAPPING_V1",
+                definition=FIELD_MAPPING_V1_DEFINITIONS[key], enabled=True,
             ),
         )
         for key, source, target, name in [

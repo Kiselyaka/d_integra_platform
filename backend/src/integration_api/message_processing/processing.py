@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import datetime
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from integration_api.message_processing.contracts import ExternalEventEnvelope
 from integration_api.configuration.routes import ConfigurationError
+from integration_api.message_processing.field_mapping import TransformationConfigurationError, TransformationError
 from integration_api.message_processing.models import Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.ports import IntegrationRoute, RouteProvider, RouteTransformationPort, TargetPayload
 from shared.messaging.contracts import InternalEventEnvelope, envelope_json, utc_now
@@ -70,8 +72,12 @@ class EventProcessingService:
                 continue
             try:
                 target_payload = self._transformer.transform(route, event)
+            except TransformationConfigurationError as exc:
+                self._record_failure(message_id, route, "CONFIGURATION_ERROR", _transformation_error_json(exc))
+                continue
             except Exception as exc:
-                self._record_failure(message_id, route, "TRANSFORMATION_FAILED", str(exc))
+                error = _transformation_error_json(exc) if isinstance(exc, TransformationError) else str(exc)
+                self._record_failure(message_id, route, "TRANSFORMATION_FAILED", error)
                 continue
             if self._record_requested(message_id, event, route, target_payload):
                 requested_count += 1
@@ -244,3 +250,7 @@ def _target_url(route: IntegrationRoute) -> str:
     if not endpoint.startswith("/"):
         endpoint = f"/{endpoint}"
     return f"{route.target_base_url.rstrip('/')}{endpoint}"
+
+
+def _transformation_error_json(error: TransformationError) -> str:
+    return json.dumps(error.as_dict(), sort_keys=True, default=str)
