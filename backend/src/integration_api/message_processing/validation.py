@@ -28,3 +28,15 @@ class PydanticSourceValidator:
         except ValidationError as error:
             return error.json()
         return None
+
+
+class TechnicalEnvelopeValidator:
+    """M8 intake adapter.
+
+    FastAPI/Pydantic has already validated the envelope itself. Business
+    payload contracts are deliberately evaluated later per route by
+    ``PreprocessingPipeline`` so fan-out routes stay independent.
+    """
+
+    def validate(self, event: ExternalEventEnvelope) -> str | None:
+        return None

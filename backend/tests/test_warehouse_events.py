@@ -70,8 +70,6 @@ def test_parser_rejects_malformed_or_unsupported_xml() -> None:
         ("<WarehouseEvent>", "Malformed XML"),
         (_warehouse_xml().replace("<EventId>3c8830d1-3fe1-4d89-8da6-c9075e09bb60</EventId>", ""), "Missing required element: EventId"),
         (_warehouse_xml("inventory.changed"), "Unsupported EventType: inventory.changed"),
-        (_warehouse_xml(payload="<ReservationSucceeded><OrderNumber>451</OrderNumber></ReservationSucceeded>"), "Missing required element: Status"),
-        (_warehouse_xml("reservation.failed", payload="<ReservationFailed><OrderNumber>451</OrderNumber><Status>FAILED</Status><Code>OUT_OF_STOCK</Code></ReservationFailed>"), "Missing required element: Message"),
     ]
     for xml, expected_error in invalid_cases:
         try:
@@ -82,13 +80,10 @@ def test_parser_rejects_malformed_or_unsupported_xml() -> None:
             raise AssertionError("Expected WarehouseXmlParseError")
 
 
-def test_parser_rejects_missing_payload_element() -> None:
+def test_parser_keeps_contract_invalid_xml_for_route_level_xsd_validation() -> None:
     xml = _warehouse_xml().replace(
         "<Payload><ReservationSucceeded><OrderNumber>451</OrderNumber><Status>SUCCEEDED</Status></ReservationSucceeded></Payload>", ""
     )
-    try:
-        parse_warehouse_event(xml.encode("utf-8"))
-    except WarehouseXmlParseError as error:
-        assert str(error) == "Missing required element: Payload"
-    else:
-        raise AssertionError("Expected WarehouseXmlParseError")
+    event = parse_warehouse_event(xml.encode("utf-8"))
+    assert event.event_type == "warehouse.reservation.succeeded"
+    assert event.payload == {"external_order_id": None, "status": None}

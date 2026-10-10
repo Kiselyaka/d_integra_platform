@@ -13,7 +13,12 @@ from integration_api.configuration.models import (
     ValidationSchema,
 )
 from integration_api.message_processing.contracts import ExternalEventEnvelope
-from integration_api.message_processing.ports import IntegrationRoute, RetryPolicyConfiguration, RouteProvider
+from integration_api.message_processing.ports import (
+    IntegrationRoute,
+    RetryPolicyConfiguration,
+    RouteProvider,
+    ValidationSchemaConfiguration,
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -46,26 +51,49 @@ class PostgresRouteConfigurationProvider(RouteProvider):
                 raise ConfigurationError(f"Source system is disabled: {source.code}")
 
             target = aliased(ExternalSystem)
+            source_schema = aliased(ValidationSchema)
+            target_schema = aliased(ValidationSchema)
             statement = (
-                select(IntegrationRouteConfiguration, target, RetryPolicy, TransformationDefinition, ValidationSchema)
+                select(IntegrationRouteConfiguration, target, RetryPolicy, TransformationDefinition, source_schema, target_schema)
                 .join(target, IntegrationRouteConfiguration.target_system_id == target.id)
                 .join(RetryPolicy, IntegrationRouteConfiguration.retry_policy_id == RetryPolicy.id)
                 .outerjoin(
                     TransformationDefinition,
                     IntegrationRouteConfiguration.transformation_id == TransformationDefinition.id,
                 )
-                .outerjoin(ValidationSchema, IntegrationRouteConfiguration.validation_schema_id == ValidationSchema.id)
+                .outerjoin(source_schema, IntegrationRouteConfiguration.source_validation_schema_id == source_schema.id)
+                .outerjoin(target_schema, IntegrationRouteConfiguration.target_validation_schema_id == target_schema.id)
                 .where(
                     IntegrationRouteConfiguration.source_system_id == source.id,
                     IntegrationRouteConfiguration.event_type == event.event_type,
                     IntegrationRouteConfiguration.enabled.is_(True),
+                    IntegrationRouteConfiguration.status == "ACTIVE",
                 )
                 .order_by(IntegrationRouteConfiguration.route_key, IntegrationRouteConfiguration.version)
             )
             return [
-                self._to_snapshot(route, target_system, retry_policy, transformation, validation_schema)
-                for route, target_system, retry_policy, transformation, validation_schema in session.execute(statement).all()
+                self._to_snapshot(route, target_system, retry_policy, transformation, source_contract, target_contract)
+                for route, target_system, retry_policy, transformation, source_contract, target_contract in session.execute(statement).all()
             ]
+
+    def get_route_version(self, route_id: str) -> IntegrationRoute | None:
+        """Resolve an exact DRAFT/ACTIVE route for side-effect-free preview."""
+        with self._session_factory() as session:
+            target = aliased(ExternalSystem)
+            source_schema = aliased(ValidationSchema)
+            target_schema = aliased(ValidationSchema)
+            row = session.execute(
+                select(IntegrationRouteConfiguration, target, RetryPolicy, TransformationDefinition, source_schema, target_schema)
+                .join(target, IntegrationRouteConfiguration.target_system_id == target.id)
+                .join(RetryPolicy, IntegrationRouteConfiguration.retry_policy_id == RetryPolicy.id)
+                .outerjoin(TransformationDefinition, IntegrationRouteConfiguration.transformation_id == TransformationDefinition.id)
+                .outerjoin(source_schema, IntegrationRouteConfiguration.source_validation_schema_id == source_schema.id)
+                .outerjoin(target_schema, IntegrationRouteConfiguration.target_validation_schema_id == target_schema.id)
+                .where(IntegrationRouteConfiguration.id == route_id)
+            ).one_or_none()
+            if row is None:
+                return None
+            return self._to_snapshot(*row)
 
     @staticmethod
     def _to_snapshot(
@@ -73,7 +101,8 @@ class PostgresRouteConfigurationProvider(RouteProvider):
         target: ExternalSystem,
         retry: RetryPolicy,
         transformation: TransformationDefinition | None,
-        validation_schema: ValidationSchema | None,
+        source_schema: ValidationSchema | None,
+        target_schema: ValidationSchema | None,
     ) -> IntegrationRoute:
         errors: list[str] = []
         if not target.enabled:
@@ -84,8 +113,13 @@ class PostgresRouteConfigurationProvider(RouteProvider):
             errors.append("Route has no transformation definition")
         elif not transformation.enabled:
             errors.append(f"Transformation is disabled: {transformation.transformation_key}")
-        if validation_schema is not None and not validation_schema.enabled:
-            errors.append(f"Validation schema is disabled: {validation_schema.schema_key}")
+        elif transformation.status != "ACTIVE":
+            errors.append(f"Transformation is not ACTIVE: {transformation.transformation_key}")
+        for role, validation_schema in (("Source", source_schema), ("Target", target_schema)):
+            if validation_schema is not None and not validation_schema.enabled:
+                errors.append(f"{role} validation schema is disabled: {validation_schema.schema_key}")
+            if validation_schema is not None and validation_schema.status != "ACTIVE":
+                errors.append(f"{role} validation schema is not ACTIVE: {validation_schema.schema_key}")
         if transformation is not None and (
             route.source_format != transformation.source_format or route.target_format != transformation.target_format
         ):
@@ -106,8 +140,10 @@ class PostgresRouteConfigurationProvider(RouteProvider):
             transformation_version=transformation.version if transformation is not None else None,
             transformation_engine_type=transformation.engine_type if transformation is not None else None,
             transformation_definition=transformation.definition if transformation is not None else None,
-            validation_schema_key=validation_schema.schema_key if validation_schema is not None else None,
-            validation_schema_version=validation_schema.version if validation_schema is not None else None,
+            validation_schema_key=source_schema.schema_key if source_schema is not None else None,
+            validation_schema_version=source_schema.version if source_schema is not None else None,
+            source_validation_schema=_schema_snapshot(source_schema),
+            target_validation_schema=_schema_snapshot(target_schema),
             retry_policy=RetryPolicyConfiguration(
                 id=retry.id,
                 max_attempts=retry.max_attempts,
@@ -121,3 +157,17 @@ class PostgresRouteConfigurationProvider(RouteProvider):
             read_timeout_ms=target.read_timeout_ms,
             configuration_error="; ".join(errors) if errors else None,
         )
+
+
+def _schema_snapshot(schema: ValidationSchema | None) -> ValidationSchemaConfiguration | None:
+    if schema is None:
+        return None
+    return ValidationSchemaConfiguration(
+        id=schema.id,
+        key=schema.schema_key,
+        version=schema.version,
+        payload_format=schema.payload_format,
+        schema_type=schema.schema_type,
+        definition_json=schema.definition_json,
+        definition_text=schema.definition_text,
+    )

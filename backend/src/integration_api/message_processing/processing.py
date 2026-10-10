@@ -14,6 +14,8 @@ from integration_api.configuration.routes import ConfigurationError
 from integration_api.message_processing.field_mapping import TransformationConfigurationError, TransformationError
 from integration_api.message_processing.models import Message, ProcessingOutboxEvent, RouteProcessingResult
 from integration_api.message_processing.ports import IntegrationRoute, RouteProvider, RouteTransformationPort, TargetPayload
+from integration_api.message_processing.preprocessing import PreprocessingPipeline, SourceMaterial, StructuredDiagnostic
+from integration_api.message_processing.transformation import RouteTransformationProvider
 from shared.messaging.contracts import InternalEventEnvelope, envelope_json, utc_now
 
 
@@ -34,11 +36,12 @@ class EventProcessingService:
         self._session_factory = session_factory
         self._route_provider = route_provider
         self._transformer = transformer
+        self._pipeline = PreprocessingPipeline(transformer) if isinstance(transformer, RouteTransformationProvider) else None
         # Kept only for M4/M5 focused fixtures. The production M6 provider
         # supplies the retry snapshot as part of each resolved route.
         self._fallback_retry_policy = retry_policy
 
-    def process(self, message_id: str) -> None:
+    def process(self, message_id: str, source_material: SourceMaterial | None = None) -> None:
         with self._session_factory() as session:
             message = session.get(Message, message_id)
             if message is None or message.status != "VALIDATED":
@@ -68,17 +71,30 @@ class EventProcessingService:
         for route in routes:
             logger.info("route_matched", extra={"message_id": message_id, "route_key": route.key})
             if route.configuration_error is not None:
-                self._record_failure(message_id, route, "CONFIGURATION_ERROR", route.configuration_error)
+                self._record_failure(
+                    message_id, route, "CONFIGURATION_ERROR",
+                    StructuredDiagnostic("configuration", "CONFIGURATION_INVALID", route.configuration_error),
+                )
                 continue
-            try:
-                target_payload = self._transformer.transform(route, event)
-            except TransformationConfigurationError as exc:
-                self._record_failure(message_id, route, "CONFIGURATION_ERROR", _transformation_error_json(exc))
-                continue
-            except Exception as exc:
-                error = _transformation_error_json(exc) if isinstance(exc, TransformationError) else str(exc)
-                self._record_failure(message_id, route, "TRANSFORMATION_FAILED", error)
-                continue
+            if self._pipeline is not None and route.source_validation_schema is not None and route.target_validation_schema is not None:
+                outcome = self._pipeline.execute(route, event, source_material)
+                if not outcome.success:
+                    self._record_failure(message_id, route, outcome.status, outcome.diagnostic)
+                    continue
+                assert outcome.payload is not None
+                target_payload = outcome.payload
+            else:
+                # Compatibility only for M1--M5 static test fixtures. Every
+                # production M8 route has explicit schema references.
+                try:
+                    target_payload = self._transformer.transform(route, event)
+                except TransformationConfigurationError as exc:
+                    self._record_failure(message_id, route, "CONFIGURATION_ERROR", StructuredDiagnostic("transformation", "CONFIGURATION_INVALID", _transformation_error_json(exc)))
+                    continue
+                except Exception as exc:
+                    error = _transformation_error_json(exc) if isinstance(exc, TransformationError) else str(exc)
+                    self._record_failure(message_id, route, "TRANSFORMATION_FAILED", StructuredDiagnostic("transformation", "TRANSFORMATION_FAILED", error))
+                    continue
             if self._record_requested(message_id, event, route, target_payload):
                 requested_count += 1
 
@@ -123,6 +139,12 @@ class EventProcessingService:
                 transformation_version=route.transformation_version,
                 validation_schema_key=route.validation_schema_key,
                 validation_schema_version=route.validation_schema_version,
+                source_validation_schema_id=route.source_validation_schema.id if route.source_validation_schema else None,
+                source_validation_schema_key=route.source_validation_schema.key if route.source_validation_schema else None,
+                source_validation_schema_version=route.source_validation_schema.version if route.source_validation_schema else None,
+                target_validation_schema_id=route.target_validation_schema.id if route.target_validation_schema else None,
+                target_validation_schema_key=route.target_validation_schema.key if route.target_validation_schema else None,
+                target_validation_schema_version=route.target_validation_schema.version if route.target_validation_schema else None,
                 status="DELIVERY_REQUESTED",
                 completed_at=now,
             )
@@ -163,7 +185,7 @@ class EventProcessingService:
             logger.info("delivery_requested_recorded", extra={"message_id": message_id, "delivery_id": delivery_id})
             return True
 
-    def _record_failure(self, message_id: str, route: IntegrationRoute, status: str, error: str) -> None:
+    def _record_failure(self, message_id: str, route: IntegrationRoute, status: str, diagnostic: StructuredDiagnostic | None) -> None:
         with self._session_factory() as session:
             existing = session.scalar(
                 select(RouteProcessingResult).where(
@@ -185,8 +207,17 @@ class EventProcessingService:
                     transformation_version=route.transformation_version,
                     validation_schema_key=route.validation_schema_key,
                     validation_schema_version=route.validation_schema_version,
+                source_validation_schema_id=route.source_validation_schema.id if route.source_validation_schema else None,
+                source_validation_schema_key=route.source_validation_schema.key if route.source_validation_schema else None,
+                source_validation_schema_version=route.source_validation_schema.version if route.source_validation_schema else None,
+                target_validation_schema_id=route.target_validation_schema.id if route.target_validation_schema else None,
+                target_validation_schema_key=route.target_validation_schema.key if route.target_validation_schema else None,
+                target_validation_schema_version=route.target_validation_schema.version if route.target_validation_schema else None,
                     status=status,
-                    error=error,
+                error=json.dumps(diagnostic.as_dict(), sort_keys=True) if diagnostic else None,
+                error_stage=diagnostic.stage if diagnostic else None,
+                error_category=diagnostic.category if diagnostic else None,
+                error_details=diagnostic.as_dict() if diagnostic else None,
                     completed_at=utc_now(),
                 )
             )

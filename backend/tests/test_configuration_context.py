@@ -13,6 +13,7 @@ from integration_api.configuration.models import (
     IntegrationRouteConfiguration,
     RetryPolicy,
     TransformationDefinition,
+    ValidationSchema,
 )
 from integration_api.configuration.routes import ConfigurationError, PostgresRouteConfigurationProvider
 from integration_api.configuration.seed import seed_demo_configuration
@@ -202,12 +203,14 @@ def test_transformation_identity_is_selected_by_route_data_not_target_branching(
         crm_transformation = session.scalar(select(TransformationDefinition).where(
             TransformationDefinition.transformation_key == "order-created-to-crm"
         ))
-        assert route is not None and crm_transformation is not None
+        crm_schema = session.scalar(select(ValidationSchema).where(ValidationSchema.schema_key == "crm-order-target"))
+        assert route is not None and crm_transformation is not None and crm_schema is not None
         # This deliberately odd test route is not sent over HTTP. It proves
         # that Message Processing executes the configured transformation key,
         # not a hardcoded target_system == warehouse branch.
         route.transformation_id = crm_transformation.id
         route.target_format = "JSON"
+        route.target_validation_schema_id = crm_schema.id
         session.commit()
     event = _event("event-transform-selection")
     _persist_message(factory, event, "message-transform-selection")

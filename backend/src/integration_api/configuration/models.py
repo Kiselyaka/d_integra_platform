@@ -70,8 +70,11 @@ class ValidationSchema(ConfigurationBase):
     schema_type: Mapped[str] = mapped_column(String(50), nullable=False)
     definition_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     definition_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TransformationDefinition(ConfigurationBase):
@@ -89,8 +92,11 @@ class TransformationDefinition(ConfigurationBase):
     target_format: Mapped[str] = mapped_column(String(32), nullable=False)
     engine_type: Mapped[str] = mapped_column(String(50), nullable=False)
     definition: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RetryPolicy(ConfigurationBase):
@@ -123,10 +129,18 @@ class IntegrationRouteConfiguration(ConfigurationBase):
     __table_args__ = (
         UniqueConstraint("route_key", "version", name="uq_configuration_routes_key_version"),
         Index(
-            "ix_configuration_routes_enabled_source_event",
+            "ix_configuration_routes_active_source_event",
             "source_system_id",
             "event_type",
-            postgresql_where=text("enabled"),
+            postgresql_where=text("status = 'ACTIVE' AND enabled"),
+            sqlite_where=text("status = 'ACTIVE' AND enabled"),
+        ),
+        Index(
+            "uq_configuration_routes_one_active_version",
+            "route_key",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+            sqlite_where=text("status = 'ACTIVE'"),
         ),
         {"schema": CONFIGURATION_SCHEMA},
     )
@@ -135,6 +149,7 @@ class IntegrationRouteConfiguration(ConfigurationBase):
     route_key: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     source_system_id: Mapped[str] = mapped_column(ForeignKey(f"{CONFIGURATION_SCHEMA}.external_systems.id"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -143,7 +158,15 @@ class IntegrationRouteConfiguration(ConfigurationBase):
     target_endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
     source_format: Mapped[str] = mapped_column(String(32), nullable=False)
     target_format: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Deprecated M6 compatibility reference. M8 uses the explicit source and
+    # target references below; migration keeps this column for old rows.
     validation_schema_id: Mapped[str | None] = mapped_column(
+        ForeignKey(f"{CONFIGURATION_SCHEMA}.validation_schemas.id"), nullable=True
+    )
+    source_validation_schema_id: Mapped[str | None] = mapped_column(
+        ForeignKey(f"{CONFIGURATION_SCHEMA}.validation_schemas.id"), nullable=True
+    )
+    target_validation_schema_id: Mapped[str | None] = mapped_column(
         ForeignKey(f"{CONFIGURATION_SCHEMA}.validation_schemas.id"), nullable=True
     )
     transformation_id: Mapped[str | None] = mapped_column(
@@ -155,3 +178,5 @@ class IntegrationRouteConfiguration(ConfigurationBase):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

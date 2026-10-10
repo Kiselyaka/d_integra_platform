@@ -25,11 +25,10 @@ def parse_warehouse_event(xml_body: bytes) -> ExternalEventEnvelope:
         raise WarehouseXmlParseError("Root element must be WarehouseEvent")
 
     warehouse_event_type = _required_text(root, "EventType")
-    payload_element = root.find("Payload")
-    if payload_element is None:
-        raise WarehouseXmlParseError("Missing required element: Payload")
-
-    event_type, payload = _parse_payload(warehouse_event_type, payload_element)
+    # M8 deliberately keeps this adapter at the technical boundary.  A
+    # syntactically valid but contract-invalid XML body must still resolve to a
+    # route and become SOURCE_VALIDATION_FAILED after XSD validation.
+    event_type, payload = _parse_payload(warehouse_event_type, root.find("Payload"))
     envelope_data: dict[str, Any] = {
         "event_id": _required_text(root, "EventId"),
         "event_type": event_type,
@@ -51,25 +50,25 @@ def parse_warehouse_event(xml_body: bytes) -> ExternalEventEnvelope:
         raise WarehouseXmlParseError("Invalid Warehouse event envelope") from error
 
 
-def _parse_payload(event_type: str, payload: ElementTree.Element) -> tuple[str, dict[str, str]]:
+def _parse_payload(event_type: str, payload: ElementTree.Element | None) -> tuple[str, dict[str, str | None]]:
     if event_type == "reservation.succeeded":
-        reservation = _required_child(payload, "ReservationSucceeded")
+        reservation = payload.find("ReservationSucceeded") if payload is not None else None
         return (
             "warehouse.reservation.succeeded",
             {
-                "external_order_id": _required_text(reservation, "OrderNumber"),
-                "status": _required_text(reservation, "Status"),
+                "external_order_id": _optional_text(reservation, "OrderNumber") if reservation is not None else None,
+                "status": _optional_text(reservation, "Status") if reservation is not None else None,
             },
         )
     if event_type == "reservation.failed":
-        reservation = _required_child(payload, "ReservationFailed")
+        reservation = payload.find("ReservationFailed") if payload is not None else None
         return (
             "warehouse.reservation.failed",
             {
-                "external_order_id": _required_text(reservation, "OrderNumber"),
-                "status": _required_text(reservation, "Status"),
-                "reason_code": _required_text(reservation, "Code"),
-                "message": _required_text(reservation, "Message"),
+                "external_order_id": _optional_text(reservation, "OrderNumber") if reservation is not None else None,
+                "status": _optional_text(reservation, "Status") if reservation is not None else None,
+                "reason_code": _optional_text(reservation, "Code") if reservation is not None else None,
+                "message": _optional_text(reservation, "Message") if reservation is not None else None,
             },
         )
     raise WarehouseXmlParseError(f"Unsupported EventType: {event_type}")

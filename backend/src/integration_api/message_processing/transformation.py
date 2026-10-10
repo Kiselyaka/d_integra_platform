@@ -128,14 +128,7 @@ class RouteTransformationProvider(RouteTransformationPort):
 
     def transform(self, route: IntegrationRoute, event: ExternalEventEnvelope) -> TargetPayload:
         if route.transformation_engine_type == "FIELD_MAPPING_V1":
-            if route.transformation_definition is None:
-                raise TransformationConfigurationError("FIELD_MAPPING_V1 route has no definition")
-            canonical_document = self._field_mapping_engine.transform(
-                route.transformation_definition,
-                event.payload,
-                {"event": {"event_id": event.event_id, "event_type": event.event_type, "source_system": event.source_system}},
-            )
-            return serialize_target_document(route.target_format, canonical_document)
+            return serialize_target_document(route.target_format, self.transform_document(route, event))
         if route.transformation_engine_type not in {None, "BUILTIN"}:
             raise TransformationConfigurationError(f"Unsupported transformation engine: {route.transformation_engine_type}")
         try:
@@ -143,6 +136,22 @@ class RouteTransformationProvider(RouteTransformationPort):
         except KeyError as error:
             raise ValueError(f"No transformation is registered for route {route.key}") from error
         return TargetPayload(content_type, handler(event))
+
+    def transform_document(self, route: IntegrationRoute, event: ExternalEventEnvelope) -> dict[str, Any]:
+        """Return M7's canonical document without coupling it to delivery.
+
+        M8's production pipeline and preview both call this method, then use
+        the same serializer and target validator.
+        """
+        if route.transformation_engine_type != "FIELD_MAPPING_V1":
+            raise TransformationConfigurationError("Canonical documents require FIELD_MAPPING_V1")
+        if route.transformation_definition is None:
+            raise TransformationConfigurationError("FIELD_MAPPING_V1 route has no definition")
+        return self._field_mapping_engine.transform(
+            route.transformation_definition,
+            event.payload,
+            {"event": {"event_id": event.event_id, "event_type": event.event_type, "source_system": event.source_system}},
+        )
 
 
 def _legacy_transformation_key(route: IntegrationRoute, event: ExternalEventEnvelope) -> str:

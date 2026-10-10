@@ -44,6 +44,19 @@ class RetryPolicyConfiguration:
 
 
 @dataclass(frozen=True)
+class ValidationSchemaConfiguration:
+    """Immutable source or target contract resolved with a route version."""
+
+    id: str
+    key: str
+    version: int
+    payload_format: str
+    schema_type: str
+    definition_json: dict[str, Any] | None
+    definition_text: str | None
+
+
+@dataclass(frozen=True)
 class IntegrationRoute:
     """Runtime configuration snapshot owned by the Configuration Context.
 
@@ -66,8 +79,12 @@ class IntegrationRoute:
     transformation_version: int | None = None
     transformation_engine_type: str | None = None
     transformation_definition: dict[str, Any] | None = None
+    # Legacy M6 fields remain populated from source_schema for historical
+    # readers. New M8 code uses the explicit references below.
     validation_schema_key: str | None = None
     validation_schema_version: int | None = None
+    source_validation_schema: ValidationSchemaConfiguration | None = None
+    target_validation_schema: ValidationSchemaConfiguration | None = None
     retry_policy: RetryPolicyConfiguration | None = None
     connect_timeout_ms: int = 5000
     read_timeout_ms: int = 5000
